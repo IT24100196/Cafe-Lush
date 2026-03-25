@@ -1,0 +1,225 @@
+/* ── Screen: modal overlay ─────────────────────────────────────────────────── */
+.pbv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+
+.pbv-modal {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  font-family: Arial, Helvetica, sans-serif;
+  margin: auto;
+}
+
+/* ── Bill content (shared by both components) ──────────────────────────────── */
+.pbv-content {
+  padding: 32px 32px 24px;
+}
+
+.pbv-header {
+  text-align: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #111;
+}
+
+.pbv-org-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #111;
+}
+
+.pbv-org-sub {
+  font-size: 11px;
+  color: #555;
+  margin-top: 3px;
+}
+
+.pbv-copy-label {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border: 1.5px solid #111;
+  padding: 2px 10px;
+  border-radius: 3px;
+  color: #111;
+}
+
+.pbv-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  margin-bottom: 18px;
+  font-size: 12px;
+}
+
+.pbv-meta-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.pbv-meta-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #777;
+}
+
+.pbv-meta-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111;
+  margin-top: 1px;
+}
+
+.pbv-delivery-box {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  font-size: 12px;
+}
+
+.pbv-delivery-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #777;
+  margin-bottom: 4px;
+}
+
+.pbv-delivery-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111;
+  line-height: 1.5;
+}
+
+/* ── Items table ───────────────────────────────────────────────────────────── */
+.pbv-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+
+.pbv-table thead th {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+  padding: 6px 4px;
+  border-bottom: 1.5px solid #111;
+  text-align: left;
+}
+
+.pbv-table thead th:last-child,
+.pbv-table tbody td:last-child {
+  text-align: right;
+}
+
+.pbv-table thead th:nth-child(2),
+.pbv-table tbody td:nth-child(2) {
+  text-align: center;
+}
+
+.pbv-table tbody td {
+  padding: 8px 4px;
+  border-bottom: 1px solid #eee;
+  color: #111;
+  vertical-align: top;
+}
+
+.pbv-item-name {
+  font-weight: 600;
+}
+
+.pbv-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0 0;
+  border-top: 2px solid #111;
+  margin-top: 4px;
+}
+
+.pbv-total-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #111;
+}
+
+.pbv-total-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #111;
+}
+
+.pbv-footer {
+  text-align: center;
+  font-size: 11px;
+  color: #777;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px dashed #ccc;
+}
+
+/* ── Action buttons (hidden when printing) ─────────────────────────────────── */
+.pbv-actions {
+  display: flex;
+  gap: 10px;
+  padding: 0 32px 24px;
+}
+
+.pbv-btn-print {
+  flex: 1;
+  padding: 10px;
+  background: #2C1A0E;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pbv-btn-close {
+  flex: 1;
+  padding: 10px;
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ── @media print ──────────────────────────────────────────────────────────── */
+@media print {
+  /* Bill is printed in a new tab — hide the modal overlay if print is triggered from this page */
+  .pbv-overlay {
+    display: none !important;
+  }
+}
