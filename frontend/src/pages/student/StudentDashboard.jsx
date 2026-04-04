@@ -6,11 +6,16 @@ import {
   CalendarDays,
   ChefHat,
   Clock3,
+  Coffee,
+  Facebook,
   HandPlatter,
   History,
-  Home,
+  Instagram,
   LogOut,
+  Mail,
+  MapPin,
   MapPinned,
+  MessageCircle,
   MessageSquare,
   BarChart2,
   Minus,
@@ -71,8 +76,8 @@ function FieldLabel({ children }) {
 }
 
 // ── Delivery helpers ──────────────────────────────────────────────────────────
-const RESTAURANT_LAT = 6.9271
-const RESTAURANT_LNG = 79.8612
+const RESTAURANT_LAT = 9.1667
+const RESTAURANT_LNG = 80.4167
 
 function haversine(lat1, lng1, lat2, lng2) {
   const R = 6371
@@ -87,6 +92,7 @@ function getDeliveryCharge(distanceKm) {
   if (distanceKm <= 2)  return { charge: 0,    label: 'Free' }
   if (distanceKm <= 5)  return { charge: 150,  label: 'LKR 150' }
   if (distanceKm <= 10) return { charge: 300,  label: 'LKR 300' }
+  if (distanceKm <= 40) return { charge: 500,  label: 'LKR 500' }
   return { charge: null, label: 'Outside delivery zone' }
 }
 
@@ -228,7 +234,7 @@ function DeliveryModal({ onConfirm, onCancel }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                 <span style={{ color: T.textMuted, fontWeight: 600 }}>Zone</span>
                 <span style={{ fontWeight: 700, color: T.espresso }}>
-                  {distanceInfo.km <= 2 ? '0–2 km' : distanceInfo.km <= 5 ? '2–5 km' : distanceInfo.km <= 10 ? '5–10 km' : 'Beyond 10 km'}
+                  {distanceInfo.km <= 2 ? '0–2 km' : distanceInfo.km <= 5 ? '2–5 km' : distanceInfo.km <= 10 ? '5–10 km' : distanceInfo.km <= 40 ? '10–40 km' : 'Beyond 40 km'}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -239,7 +245,7 @@ function DeliveryModal({ onConfirm, onCancel }) {
               </div>
               {isOutsideZone && (
                 <p style={{ marginTop: '8px', fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>
-                  Sorry, your location is outside our delivery zone (max 10 km).
+                  Sorry, your location is outside our delivery zone (max 40 km).
                 </p>
               )}
             </div>
@@ -1310,6 +1316,16 @@ function generateHabitTags(orders) {
   return tags
 }
 
+function SummaryCard({ label, value, CardIcon, small }) {
+  return (
+    <div style={{ background: 'linear-gradient(135deg, #faf6f0, #f5ede0)', border: '1.5px solid #e8d9c5', borderRadius: '14px', padding: '16px 18px' }}>
+      <div style={{ marginBottom: '6px' }}><CardIcon size={20} strokeWidth={2.2} color={T.caramel} /></div>
+      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: small ? '14px' : '22px', fontWeight: 800, color: T.espresso, lineHeight: 1.2, wordBreak: 'break-word' }}>{value}</div>
+      <div style={{ fontSize: '11px', color: T.textMuted, marginTop: '4px', fontWeight: 600 }}>{label}</div>
+    </div>
+  )
+}
+
 function FoodAnalyticsPanel({ orders }) {
   const confirmed = orders.filter((o) => o.status === 'confirmed')
 
@@ -1406,17 +1422,9 @@ function FoodAnalyticsPanel({ orders }) {
 
       {/* ── Summary Cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px', marginBottom: '28px' }}>
-        {[
-          { label: 'Total Orders',   value: totalOrders,          Icon: Package2 },
-          { label: 'Favourite Item', value: topItem?.[0] || '—',  Icon: UtensilsCrossed, small: true },
-          { label: 'Orders / Day',   value: dailyAvg,             Icon: CalendarDays },
-        ].map(({ label, value, Icon, small }) => (
-          <div key={label} style={{ background: 'linear-gradient(135deg, #faf6f0, #f5ede0)', border: '1.5px solid #e8d9c5', borderRadius: '14px', padding: '16px 18px' }}>
-            <div style={{ marginBottom: '6px' }}><Icon size={20} strokeWidth={2.2} color={T.caramel} /></div>
-            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: small ? '14px' : '22px', fontWeight: 800, color: T.espresso, lineHeight: 1.2, wordBreak: 'break-word' }}>{value}</div>
-            <div style={{ fontSize: '11px', color: T.textMuted, marginTop: '4px', fontWeight: 600 }}>{label}</div>
-          </div>
-        ))}
+        <SummaryCard label="Total Orders"   value={totalOrders}          CardIcon={Package2} />
+        <SummaryCard label="Favourite Item" value={topItem?.[0] || '—'}  CardIcon={UtensilsCrossed} small />
+        <SummaryCard label="Orders / Day"   value={dailyAvg}             CardIcon={CalendarDays} />
       </div>
 
       {/* ── Top Items Bar Chart ── */}
@@ -1728,6 +1736,76 @@ function ProfileModal({ user, onClose, onSaved }) {
   )
 }
 
+// ── Panel 6 — About Cafe Lush ─────────────────────────────────────────────────
+function AboutCafeLushPanel() {
+  return (
+    <div className="sd-panel">
+      <div className="sd-panel-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h2 className="sd-panel-title">About Cafe Lush</h2>
+          <p className="sd-panel-subtitle">Fine Dining &amp; Events — Jaffna, Sri Lanka</p>
+        </div>
+        <Coffee size={22} strokeWidth={2.2} color={T.caramel} />
+      </div>
+
+      {/* Brand */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' }}>
+        <img
+          src="/image/image6.jpeg"
+          alt="Cafe Lush logo"
+          style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, boxShadow: '0 0 0 2.5px #C9A84C, 0 0 14px rgba(201,168,76,0.35)' }}
+        />
+        <div>
+          <p style={{ fontFamily: "'Playfair Display', serif", fontWeight: 800, fontSize: '18px', color: T.espresso, lineHeight: 1.2 }}>Cafe Lush</p>
+          <p style={{ fontSize: '12px', color: T.textMuted, marginTop: '3px' }}>Fine Dining &amp; Events</p>
+        </div>
+      </div>
+
+      <p style={{ fontSize: '13px', color: T.coffeeMid, lineHeight: 1.7, marginBottom: '24px' }}>
+        Bringing warmth, flavour, and elegance to every meal and event in Jaffna, Sri Lanka.
+      </p>
+
+      {/* Contact */}
+      <div style={{ marginBottom: '24px' }}>
+        <p style={{ fontSize: '11px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px' }}>Contact Us</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <a href="tel:+94767228485" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: T.coffeeMid, textDecoration: 'none' }}>
+            <Phone size={15} strokeWidth={2.2} color={T.caramel} />
+            076 722 8485
+          </a>
+          <a href="https://wa.me/94767228485" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: T.coffeeMid, textDecoration: 'none' }}>
+            <MessageCircle size={15} strokeWidth={2.2} color={T.caramel} />
+            076 722 8485 (WhatsApp)
+          </a>
+          <a href="mailto:shanthaenterprise2026@gmail.com" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: T.coffeeMid, textDecoration: 'none', wordBreak: 'break-all' }}>
+            <Mail size={15} strokeWidth={2.2} color={T.caramel} />
+            shanthaenterprise2026@gmail.com
+          </a>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', fontSize: '13px', color: T.coffeeMid }}>
+            <MapPin size={15} strokeWidth={2.2} color={T.caramel} style={{ flexShrink: 0, marginTop: '2px' }} />
+            No 173, Palaly Road, Thirunalveli, Jaffna
+          </div>
+        </div>
+      </div>
+
+      {/* Social */}
+      <div>
+        <p style={{ fontSize: '11px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px' }}>Follow Us</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <a href="https://www.facebook.com/ShanthaEnterprice" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: T.coffeeMid, textDecoration: 'none' }}>
+            <Facebook size={15} strokeWidth={2.2} color={T.caramel} />
+            Shantha Enterprice
+          </a>
+          <a href="https://www.instagram.com/ShanthaEnterprice" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: T.coffeeMid, textDecoration: 'none' }}>
+            <Instagram size={15} strokeWidth={2.2} color={T.caramel} />
+            Shantha Enterprice
+          </a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Tab config ────────────────────────────────────────────────────────────────
 const TABS = [
   { key: 'packages',    label: 'Meal Packages',    Icon: Package2   },
@@ -1735,6 +1813,7 @@ const TABS = [
   { key: 'history',     label: 'Order History',     Icon: History    },
   { key: 'analytics',   label: 'My Food Analytics', Icon: BarChart2  },
   { key: 'suggestions', label: 'Suggestions',       Icon: MessageSquare },
+  { key: 'about',       label: 'About Cafe Lush',   Icon: Coffee     },
 ]
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
@@ -2008,6 +2087,10 @@ export default function StudentDashboard() {
 
           {activeTab === 'suggestions' && (
             <SuggestionsPanel showToast={showToast} />
+          )}
+
+          {activeTab === 'about' && (
+            <AboutCafeLushPanel />
           )}
         </main>
       </div>

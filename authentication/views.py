@@ -87,8 +87,34 @@ class ProfileView(APIView):
         return Response(UserSerializer(user).data)
 
 
+class StudentListView(APIView):
+    """Admin-only: list all registered students."""
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        students = User.objects.filter(role__name='student').order_by('-created_at')
+        return Response(UserSerializer(students, many=True).data)
+
+    def patch(self, request, pk=None):
+        """Deactivate with reason, or re-activate a student."""
+        try:
+            user = User.objects.get(pk=request.data.get('id'), role__name='student')
+        except User.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if user.is_active:
+            reason = request.data.get('reason', '').strip()
+            if not reason:
+                return Response({'detail': 'Reason is required to deactivate.'}, status=status.HTTP_400_BAD_REQUEST)
+            user.is_active = False
+            user.deactivation_reason = reason
+        else:
+            user.is_active = True
+            user.deactivation_reason = ''
+        user.save(update_fields=['is_active', 'deactivation_reason'])
+        return Response(UserSerializer(user).data)
+
+
 class GoogleLoginView(APIView):
-    permission_classes = [AllowAny]
 
     def post(self, request):
         access_token = request.data.get('access_token')

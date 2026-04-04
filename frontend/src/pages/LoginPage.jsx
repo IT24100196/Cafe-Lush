@@ -182,7 +182,8 @@ export default function LoginPage() {
 
   const [tab, setTab] = useState('login')
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
-  const [loginError, setLoginError] = useState('')
+  const [loginError,      setLoginError]      = useState('')
+  const [deactivatedMsg,  setDeactivatedMsg]  = useState('')
   const [regForm, setRegForm] = useState(EMPTY_REG)
   const [regError, setRegError] = useState('')
   const [regBusy, setRegBusy] = useState(false)
@@ -210,11 +211,19 @@ export default function LoginPage() {
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoginError('')
+    setDeactivatedMsg('')
     try {
       const user = await login(loginForm.username, loginForm.password)
       navigate(ROLE_ROUTES[user.role?.name] || '/login', { replace: true })
     } catch (err) {
-      setLoginError(err.response?.data?.detail || 'Invalid username or password.')
+      const data = err.response?.data
+      const raw  = Array.isArray(data?.detail) ? data.detail[0] : (data?.detail || 'Invalid username or password.')
+      const msg  = typeof raw === 'string' ? raw : 'Invalid username or password.'
+      if (msg.startsWith('DEACTIVATED:')) {
+        setDeactivatedMsg(msg.replace('DEACTIVATED:', '').trim())
+      } else {
+        setLoginError(msg)
+      }
     }
   }
 
@@ -269,7 +278,7 @@ export default function LoginPage() {
     }
   }
 
-  const switchTab = (nextTab) => { setTab(nextTab); setLoginError(''); setRegError('') }
+  const switchTab = (nextTab) => { setTab(nextTab); setLoginError(''); setRegError(''); setDeactivatedMsg('') }
 
   const submitBtnStyle = (busy) => ({
     width: '100%', border: 'none', borderRadius: '16px',
@@ -443,6 +452,17 @@ export default function LoginPage() {
             {tab === 'login' && (
               <>
                 {loginError && <div style={errorBoxStyle}>{loginError}</div>}
+
+                {deactivatedMsg && (
+                  <div style={{ marginBottom: '16px', borderRadius: '14px', padding: '14px 16px', background: 'rgba(180,30,30,0.18)', border: '1px solid rgba(255,100,80,0.35)', color: '#ffd5cc' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '18px' }}>🚫</span>
+                      <span style={{ fontWeight: 800, fontSize: '14px' }}>Account Deactivated</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.6, opacity: 0.9 }}>{deactivatedMsg}</p>
+                    <p style={{ margin: '8px 0 0', fontSize: '11px', opacity: 0.6 }}>Please contact the administrator if you believe this is a mistake.</p>
+                  </div>
+                )}
 
                 <form onSubmit={handleLogin}>
                   <InputField

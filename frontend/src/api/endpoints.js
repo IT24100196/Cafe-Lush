@@ -80,6 +80,11 @@ export const updateMealSlot    = (id, data)      => api.patch(`/pos/weekly-meal-
 export const submitSuggestion    = (data) => api.post('/meals/suggestions/', data)
 export const getSuggestions      = ()     => api.get('/meals/suggestions/')
 export const markSuggestionsRead = ()     => api.patch('/meals/suggestions/')
+
+// Users (admin)
+export const getStudents        = ()              => api.get('/auth/users/')
+export const deactivateStudent  = (id, reason)   => api.patch('/auth/users/', { id, reason })
+export const activateStudent    = (id)            => api.patch('/auth/users/', { id })
 export const getOnlineOrders    = ()             => api.get('/meals/online-orders/')
 export const generateOnlineBill = (orderId)      => api.post(`/meals/bills/online/${orderId}/`)
 export const generateWalkInBill = (data)         => api.post('/meals/bills/walk-in/', data)

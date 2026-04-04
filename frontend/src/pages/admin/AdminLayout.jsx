@@ -4,15 +4,16 @@ import { useAuth } from '../../context/AuthContext'
 import './AdminDashboard.css'
 
 const NAV = [
-  { to: '',               label: 'Overview'         },
-  { to: 'items',          label: 'Items Management' },
-  { to: 'public-preview', label: 'Public Preview'   },
-  { to: 'meal-packages',  label: 'Meal Packages'    },
-  { to: 'student-orders', label: 'Student Orders'   },
-  { to: 'events',         label: 'Events'           },
-  { to: 'income-outcome', label: 'Income & Outcome' },
-  { to: 'reports',        label: 'Monthly Report'   },
-  { to: 'suggestions',    label: 'Suggestions'      },
+  { to: '/admin',                  label: 'Overview'         },
+  { to: '/admin/items',            label: 'Items Management' },
+  { to: '/admin/public-preview',   label: 'Public Preview'   },
+  { to: '/admin/meal-packages',    label: 'Meal Packages'    },
+  { to: '/admin/student-orders',   label: 'Student Orders'   },
+  { to: '/admin/events',           label: 'Events'           },
+  { to: '/admin/income-outcome',   label: 'Income & Outcome' },
+  { to: '/admin/reports',          label: 'Monthly Report'   },
+  { to: '/admin/suggestions',      label: 'Suggestions'      },
+  { to: '/admin/users',            label: 'User Management'  },
 ]
 
 const navLinkClass = ({ isActive }) =>
@@ -55,9 +56,9 @@ function SidebarContent({ user, onLogout, closeMobile }) {
         <div className="ad-nav-label">Main Menu</div>
         {NAV.map(({ to, label }) => (
           <NavLink
-            key={to || 'overview'}
+            key={to}
             to={to}
-            end={to === ''}
+            end={to === '/admin'}
             onClick={closeMobile}
             className={navLinkClass}
           >

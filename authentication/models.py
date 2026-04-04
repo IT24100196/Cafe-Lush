@@ -29,12 +29,13 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    role       = models.ForeignKey(Role, on_delete=models.PROTECT, related_name='users')
-    username   = models.CharField(max_length=100, unique=True)
-    email      = models.EmailField(unique=True, null=True, blank=True)
-    is_active  = models.BooleanField(default=True)
-    is_staff   = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
+    role                = models.ForeignKey(Role, on_delete=models.PROTECT, related_name='users')
+    username            = models.CharField(max_length=100, unique=True)
+    email               = models.EmailField(unique=True, null=True, blank=True)
+    is_active           = models.BooleanField(default=True)
+    is_staff            = models.BooleanField(default=False)
+    created_at          = models.DateTimeField(auto_now_add=True)
+    deactivation_reason = models.TextField(blank=True, default='')
 
     objects = UserManager()
 

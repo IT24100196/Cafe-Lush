@@ -17,6 +17,7 @@ import IncomeOutcome    from './pages/admin/IncomeOutcome'
 import MonthlyReport    from './pages/admin/MonthlyReport'
 import PublicPreview    from './pages/admin/PublicPreview'
 import Suggestions      from './pages/admin/Suggestions'
+import UserManagement   from './pages/admin/UserManagement'
 
 export default function App() {
   return (
@@ -66,6 +67,7 @@ export default function App() {
             <Route path="reports"        element={<MonthlyReport />} />
             <Route path="public-preview" element={<PublicPreview />} />
             <Route path="suggestions"    element={<Suggestions />} />
+            <Route path="users"           element={<UserManagement />} />
           </Route>
 
           {/* Fallback */}
