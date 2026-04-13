@@ -28,12 +28,12 @@ from .jwt import (
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import check_password, make_password
-from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 import secrets
 import requests as http_requests
+from .email import send_transactional_email
 
 GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
 User = get_user_model()
@@ -108,16 +108,14 @@ class StudentRegistrationOTPRequestView(APIView):
             expires_at=now + timedelta(minutes=REGISTRATION_OTP_EXPIRY_MINUTES),
         )
 
-        send_mail(
+        send_transactional_email(
             subject='Cafe Lush registration OTP',
             message=(
                 f'Your Cafe Lush registration OTP is {otp}.\n\n'
                 f'This code expires in {REGISTRATION_OTP_EXPIRY_MINUTES} minutes. '
                 'If you did not request this, you can ignore this email.'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[payload['email']],
-            fail_silently=False,
         )
 
         return Response({'detail': 'OTP sent to your email.'})
@@ -388,16 +386,14 @@ class ForgotPasswordView(APIView):
             expires_at=now + timedelta(minutes=RESET_OTP_EXPIRY_MINUTES),
         )
 
-        send_mail(
+        send_transactional_email(
             subject='Cafe Lush password reset OTP',
             message=(
                 f'Your Cafe Lush password reset OTP is {otp}.\n\n'
                 f'This code expires in {RESET_OTP_EXPIRY_MINUTES} minutes. '
                 'If you did not request this, you can ignore this email.'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=False,
         )
 
         return Response({'detail': RESET_GENERIC_MESSAGE})
