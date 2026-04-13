@@ -17,7 +17,7 @@
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
   width: 100%;
   max-width: 480px;
-  max-height: calc(100vh - 48px);
+  max-height: min(78vh, 720px);
   overflow-y: auto;
   font-family: Arial, Helvetica, sans-serif;
   margin: auto;
@@ -33,6 +33,28 @@
   margin-bottom: 20px;
   padding-bottom: 16px;
   border-bottom: 2px solid #111;
+}
+
+.pbv-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.pbv-logo {
+  width: 76px;
+  height: 76px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2px solid #C9A84C;
+  padding: 4px;
+  background: #fff;
+}
+
+.pbv-logo--compact {
+  width: 58px;
+  height: 58px;
+  padding: 3px;
 }
 
 .pbv-org-name {
@@ -152,6 +174,15 @@
 
 .pbv-item-name {
   font-weight: 600;
+}
+
+.pbv-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #374151;
 }
 
 .pbv-total-row {

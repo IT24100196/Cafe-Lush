@@ -9,11 +9,13 @@ const NAV = [
   { to: '/admin/public-preview',   label: 'Public Preview'   },
   { to: '/admin/meal-packages',    label: 'Meal Packages'    },
   { to: '/admin/student-orders',   label: 'Student Orders'   },
+  { to: '/admin/walk-in-orders',   label: 'Walk-in Orders'   },
   { to: '/admin/events',           label: 'Events'           },
   { to: '/admin/income-outcome',   label: 'Income & Outcome' },
   { to: '/admin/reports',          label: 'Monthly Report'   },
   { to: '/admin/suggestions',      label: 'Suggestions'      },
-  { to: '/admin/users',            label: 'User Management'  },
+  { to: '/admin/users',            label: 'Student Management' },
+  { to: '/admin/cashiers',         label: 'Staff Management' },
 ]
 
 const navLinkClass = ({ isActive }) =>
@@ -22,7 +24,7 @@ const navLinkClass = ({ isActive }) =>
 // ── Sidebar content — defined outside to avoid react-hooks/static-components ─
 function SidebarContent({ user, onLogout, closeMobile }) {
   return (
-    <div className="flex flex-col h-full">
+    <div className="ad-sidebar-inner">
 
       {/* Logo + toggle */}
       <div className="ad-brand">

@@ -193,9 +193,11 @@ function Hero() {
       <div
         className="absolute inset-0"
         style={{
-          backgroundImage: 'url(/image/image4.jpeg)',
+          backgroundImage: 'url(/image/image8.png)',
           backgroundSize: 'cover',
           backgroundPosition: 'center center',
+          backgroundRepeat: 'no-repeat',
+          backgroundColor: '#050403',
           filter: 'brightness(1.3)',
         }}
       />

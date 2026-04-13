@@ -35,11 +35,16 @@ class MealOrder(models.Model):
     STATUS_CHOICES = [
         ('pending',   'Pending'),
         ('confirmed', 'Confirmed'),
+        ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
     DELIVERY_CHOICES = [
         ('takeaway', 'Takeaway'),
         ('delivery', 'Delivery'),
+    ]
+    LOCATION_SOURCE_CHOICES = [
+        ('address', 'Address'),
+        ('current_location', 'Current Location'),
     ]
 
     student          = models.ForeignKey(Student,  on_delete=models.PROTECT, related_name='orders')
@@ -50,6 +55,13 @@ class MealOrder(models.Model):
     delivery_type    = models.CharField(max_length=20, choices=DELIVERY_CHOICES, default='takeaway')
     quantity         = models.PositiveIntegerField(default=1)
     delivery_address = models.TextField(blank=True, default='')
+    address_line_1   = models.CharField(max_length=255, blank=True, default='')
+    address_line_2   = models.CharField(max_length=255, blank=True, default='')
+    city_area        = models.CharField(max_length=120, blank=True, default='')
+    location_source  = models.CharField(max_length=20, choices=LOCATION_SOURCE_CHOICES, default='address')
+    delivery_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    delivery_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    delivery_fee     = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     phone_number     = models.CharField(max_length=20, blank=True, default='')
     student_email    = models.EmailField(blank=True, default='')
     status           = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -86,10 +98,17 @@ class Bill(models.Model):
     ]
 
     meal_order    = models.OneToOneField(MealOrder, on_delete=models.SET_NULL, null=True, blank=True, related_name='bill')
+    cashier       = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True, related_name='bills')
     bill_number   = models.CharField(max_length=30, unique=True)
+    order_reference = models.CharField(max_length=64, unique=True, null=True, blank=True)
     source        = models.CharField(max_length=10, choices=SOURCE_CHOICES, default='online')
     customer_name = models.CharField(max_length=150, blank=True, default='')
     items         = models.JSONField(default=list)   # [{name, qty, unit_price, line_total}]
+    delivery_type = models.CharField(max_length=20, blank=True, default='')
+    delivery_address = models.TextField(blank=True, default='')
+    phone_number  = models.CharField(max_length=20, blank=True, default='')
+    subtotal_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    delivery_fee  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount  = models.DecimalField(max_digits=10, decimal_places=2)
     sent_to_email = models.EmailField(blank=True, default='')
     generated_at  = models.DateTimeField(auto_now_add=True)
@@ -100,6 +119,20 @@ class Bill(models.Model):
 
     def __str__(self):
         return self.bill_number
+
+
+class BillSequence(models.Model):
+    source        = models.CharField(max_length=10, choices=Bill.SOURCE_CHOICES)
+    sequence_date = models.DateField()
+    last_number   = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'bill_sequences'
+        unique_together = [('source', 'sequence_date')]
+        indexes = [models.Index(fields=['source', 'sequence_date'], name='bill_sequen_source_8d2e3a_idx')]
+
+    def __str__(self):
+        return f'{self.source} {self.sequence_date}: {self.last_number}'
 
 
 class Suggestion(models.Model):

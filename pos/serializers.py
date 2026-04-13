@@ -9,6 +9,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class ItemSerializer(serializers.ModelSerializer):
+    category      = serializers.PrimaryKeyRelatedField(queryset=Category.objects.filter(is_active=True))
     category_name = serializers.CharField(source='category.name', read_only=True)
     image_url     = serializers.SerializerMethodField()
 
@@ -24,9 +25,14 @@ class ItemSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return request.build_absolute_uri(obj.image.url) if request else obj.image.url
 
+    def validate_price(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Price must be greater than 0.')
+        return value
+
 
 class PosOrderItemInputSerializer(serializers.Serializer):
-    id       = serializers.PrimaryKeyRelatedField(queryset=Item.objects.filter(is_available=True), source='item')
+    id       = serializers.PrimaryKeyRelatedField(queryset=Item.objects.filter(is_available=True, category__is_active=True), source='item')
     quantity = serializers.IntegerField(min_value=1)
 
 
@@ -56,11 +62,29 @@ class WeeklyMealPlanSerializer(serializers.ModelSerializer):
         model  = WeeklyMealPlan
         fields = ['id', 'day_of_week', 'meal_time', 'meal_category', 'dishes', 'price', 'updated_at']
 
+    def validate_day_of_week(self, value):
+        if value < 0 or value > 6:
+            raise serializers.ValidationError('Day of week must be between 0 (Monday) and 6 (Sunday).')
+        return value
+
+    def validate_price(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Price must be greater than 0.')
+        return value
+
+    def validate_dishes(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError('Dishes must be provided as a list.')
+        cleaned = [str(d).strip() for d in value if str(d).strip()]
+        if not cleaned:
+            raise serializers.ValidationError('At least one dish is required.')
+        return cleaned
+
 
 class FeaturedItemSerializer(serializers.ModelSerializer):
     item    = ItemSerializer(read_only=True)
     item_id = serializers.PrimaryKeyRelatedField(
-        queryset=Item.objects.all(), source='item', write_only=True
+        queryset=Item.objects.filter(is_available=True, category__is_active=True), source='item', write_only=True
     )
 
     class Meta:

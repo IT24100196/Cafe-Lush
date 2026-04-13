@@ -1,5 +1,7 @@
-# Environment variables — never commit secrets
+# Environment variables - never commit secrets
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -17,13 +19,24 @@ env/
 *.log
 staticfiles/
 media/
-
+*.sqlite3
 
 # Node / React
+node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.local
+
+# Local IDE files
+.idea/
+
+# Local-only duplicate root npm files
+/package.json
+/package-lock.json
+
+# Database dumps / backups
+*.sql
 
 # OS
 .DS_Store

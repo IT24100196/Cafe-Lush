@@ -129,7 +129,7 @@ export default function UserManagement() {
 
   return (
     <div>
-      <PageHeader title="👥 User Management" />
+      <PageHeader title="👥 Student Management" />
 
       {/* Summary chips */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>

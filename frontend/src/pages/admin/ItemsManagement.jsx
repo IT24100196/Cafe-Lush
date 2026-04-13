@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   getItems,
   getCategories,
@@ -18,6 +18,7 @@ import {
   EmptyState,
   PageHeader,
 } from '../../components/UI'
+import { isPositiveNumber } from '../../api/validation'
 
 const EMPTY_CAT = { name: '' }
 const EMPTY_ITEM = {
@@ -39,6 +40,10 @@ function FormError({ msg }) {
 function ImagePicker({ currentUrl, onChange }) {
   const inputRef = useRef()
   const [preview, setPreview] = useState(null)
+
+  useEffect(() => {
+    setPreview(null)
+  }, [currentUrl])
 
   const handleFile = (e) => {
     const file = e.target.files[0]
@@ -122,6 +127,7 @@ export default function ItemsManagement() {
   const [catDeleteId, setCatDeleteId] = useState(null)
   const [catSaving, setCatSaving] = useState(false)
   const [catError, setCatError] = useState('')
+  const [catActionError, setCatActionError] = useState('')
 
   const [itemModal, setItemModal] = useState(false)
   const [itemForm, setItemForm] = useState(EMPTY_ITEM)
@@ -153,6 +159,7 @@ export default function ItemsManagement() {
     setCatForm(EMPTY_CAT)
     setCatEditId(null)
     setCatError('')
+    setCatActionError('')
     setCatModal(true)
   }
 
@@ -160,19 +167,34 @@ export default function ItemsManagement() {
     setCatForm({ name: c.name })
     setCatEditId(c.id)
     setCatError('')
+    setCatActionError('')
     setCatModal(true)
+  }
+
+  const closeCatModal = () => {
+    setCatModal(false)
+    setCatForm(EMPTY_CAT)
+    setCatEditId(null)
+    setCatError('')
   }
 
   const handleSaveCat = async (e) => {
     e.preventDefault()
+    const payload = { name: catForm.name.trim() }
+    if (!payload.name) {
+      setCatError('Category name is required.')
+      return
+    }
+
     setCatSaving(true)
     setCatError('')
+    setCatActionError('')
 
     try {
-      if (catEditId) await updateCategory(catEditId, catForm)
-      else await createCategory(catForm)
+      if (catEditId !== null) await updateCategory(catEditId, payload)
+      else await createCategory(payload)
 
-      setCatModal(false)
+      closeCatModal()
       refetchCategories()
       refetchItems()
     } catch (err) {
@@ -187,10 +209,19 @@ export default function ItemsManagement() {
   }
 
   const handleDeleteCat = async () => {
-    try { await deleteCategory(catDeleteId) } catch {}
-    setCatDeleteId(null)
-    refetchCategories()
-    refetchItems()
+    setCatActionError('')
+    try {
+      await deleteCategory(catDeleteId)
+      setCatDeleteId(null)
+      refetchCategories()
+      refetchItems()
+    } catch (err) {
+      setCatDeleteId(null)
+      setCatActionError(
+        err.response?.data?.detail ||
+          'Delete failed. Please try again.'
+      )
+    }
   }
 
   const openAddItem = (presetCatId = '') => {
@@ -219,16 +250,32 @@ export default function ItemsManagement() {
 
   const handleSaveItem = async (e) => {
     e.preventDefault()
+    const parsedPrice = Number(itemForm.price)
+    if (!isPositiveNumber(parsedPrice)) {
+      setItemError('Price must be greater than 0.')
+      return
+    }
+    const itemName = itemForm.name.trim()
+    if (!itemName) {
+      setItemError('Item name is required.')
+      return
+    }
+    if (!itemForm.category) {
+      setItemError('Please select a category.')
+      return
+    }
+
     setItemSaving(true)
     setItemError('')
 
     try {
       const fd = new FormData()
-      if (itemForm.item_id) fd.append('item_id', itemForm.item_id)
-      fd.append('name', itemForm.name)
-      fd.append('price', itemForm.price)
-      fd.append('category', itemForm.category)
-      fd.append('is_available', itemForm.is_available)
+      const itemId = itemForm.item_id.trim()
+      if (itemId) fd.append('item_id', itemId)
+      fd.append('name', itemName)
+      fd.append('price', parsedPrice.toString())
+      fd.append('category', String(itemForm.category))
+      fd.append('is_available', itemForm.is_available ? 'true' : 'false')
 
       if (itemImage) fd.append('image', itemImage)
       else if (itemEditImg === null && itemEditId) fd.append('image', '')
@@ -295,6 +342,8 @@ export default function ItemsManagement() {
                 </div>
                 <button onClick={openAddCat} className="ad-btn-primary">+ Add Category</button>
               </div>
+
+              <FormError msg={catActionError} />
 
               {categories.length === 0 ? (
                 <div className="rounded-2xl border border-sky-100 bg-white shadow-sm">
@@ -471,8 +520,8 @@ export default function ItemsManagement() {
 
       {catModal && (
         <Modal
-          title={catEditId ? 'Edit Category' : 'Add Category'}
-          onClose={() => setCatModal(false)}
+          title={catEditId !== null ? 'Edit Category' : 'Add Category'}
+          onClose={closeCatModal}
         >
           <FormError msg={catError} />
 
@@ -503,7 +552,7 @@ export default function ItemsManagement() {
 
               <button
                 type="button"
-                onClick={() => setCatModal(false)}
+                onClick={closeCatModal}
                 className="btn-secondary flex-1"
               >
                 Cancel
@@ -592,7 +641,7 @@ export default function ItemsManagement() {
                 className="input"
                 type="number"
                 step="0.01"
-                min="0"
+                min="0.01"
                 placeholder="0.00"
                 value={itemForm.price}
                 onChange={(e) =>
@@ -639,9 +688,9 @@ export default function ItemsManagement() {
         </Modal>
       )}
 
-      {catDeleteId && (
+      {catDeleteId !== null && (
         <ConfirmDialog
-          message="Delete this category? All items inside it will also be deleted."
+          message="Delete this category? Its menu items will be removed from active menus, while old orders and bills stay saved."
           onConfirm={handleDeleteCat}
           onCancel={() => setCatDeleteId(null)}
         />

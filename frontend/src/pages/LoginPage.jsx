@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { studentRegister } from '../api/authService'
+import { forgotPassword, requestStudentRegistrationOtp, resetPassword, verifyResetOtp, verifyStudentRegistrationOtp } from '../api/authService'
+import { isValidEmail, isValidSriLankanMobile, normalizePhone } from '../api/validation'
 import { Spinner } from '../components/UI'
 import { useGoogleLogin } from '@react-oauth/google'
 
@@ -46,6 +47,13 @@ const EMPTY_REG = {
   confirm_password: '',
   full_name: '',
   contact: '',
+}
+
+const EMPTY_RESET = {
+  identifier: '',
+  otp: '',
+  password: '',
+  confirm_password: '',
 }
 
 if (typeof document !== 'undefined' && !document.getElementById('cafe-lush-fonts')) {
@@ -183,12 +191,23 @@ export default function LoginPage() {
   const [tab, setTab] = useState('login')
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError,      setLoginError]      = useState('')
+  const [loginInfo,       setLoginInfo]       = useState('')
   const [deactivatedMsg,  setDeactivatedMsg]  = useState('')
   const [regForm, setRegForm] = useState(EMPTY_REG)
   const [regError, setRegError] = useState('')
+  const [regMessage, setRegMessage] = useState('')
   const [regBusy, setRegBusy] = useState(false)
+  const [regStep, setRegStep] = useState('form')
+  const [regOtp, setRegOtp] = useState('')
+  const [resetForm, setResetForm] = useState(EMPTY_RESET)
+  const [resetStep, setResetStep] = useState('request')
+  const [resetToken, setResetToken] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetMessage, setResetMessage] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
   const [showLoginPass, setShowLoginPass] = useState(false)
   const [showRegPass, setShowRegPass] = useState(false)
+  const [showResetPass, setShowResetPass] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
 
   useEffect(() => {
@@ -211,6 +230,7 @@ export default function LoginPage() {
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoginError('')
+    setLoginInfo('')
     setDeactivatedMsg('')
     try {
       const user = await login(loginForm.username, loginForm.password)
@@ -256,29 +276,195 @@ export default function LoginPage() {
   const handleRegister = async (e) => {
     e.preventDefault()
     setRegError('')
+    setRegMessage('')
+
+    const username = regForm.username.trim()
+    const fullName = regForm.full_name.trim()
+    const email = regForm.email.trim()
+    const contact = regForm.contact.trim()
+
+    if (!username) {
+      setRegError('Username is required.')
+      return
+    }
+    if (!fullName) {
+      setRegError('Full name is required.')
+      return
+    }
+    if (!email) {
+      setRegError('Email is required for OTP verification.')
+      return
+    }
+    if (!isValidEmail(email)) {
+      setRegError('Enter a valid email address (example: user@example.com).')
+      return
+    }
+    if (contact && !isValidSriLankanMobile(contact)) {
+      setRegError('Enter a valid Sri Lankan mobile number (example: 0771234567 or +94771234567).')
+      return
+    }
     if (regForm.password !== regForm.confirm_password) {
       setRegError('Passwords do not match.')
       return
     }
+
     setRegBusy(true)
     try {
-      const { confirm_password: _confirm, ...payload } = regForm
-      const user = await studentRegister(payload)
-      navigate(ROLE_ROUTES[user.role?.name] || '/student', { replace: true })
-    } catch (err) {
-      const data = err.response?.data
-      if (data && typeof data === 'object') {
-        const first = Object.values(data)[0]
-        setRegError(Array.isArray(first) ? first[0] : first)
-      } else {
-        setRegError('Registration failed. Please try again.')
+      const payload = {
+        ...regForm,
+        username,
+        full_name: fullName,
+        email,
+        contact: contact ? normalizePhone(contact) : '',
       }
+      const { data } = await requestStudentRegistrationOtp(payload)
+      setRegForm(payload)
+      setRegOtp('')
+      setRegStep('otp')
+      setRegMessage(data.detail || 'OTP sent to your email.')
+    } catch (err) {
+      setRegError(getAuthErrorMessage(err, 'Registration failed. Please try again.'))
     } finally {
       setRegBusy(false)
     }
   }
 
-  const switchTab = (nextTab) => { setTab(nextTab); setLoginError(''); setRegError(''); setDeactivatedMsg('') }
+  const resetRegistrationFlow = () => {
+    setRegForm(EMPTY_REG)
+    setRegStep('form')
+    setRegOtp('')
+    setRegError('')
+    setRegMessage('')
+    setShowRegPass(false)
+  }
+
+  const resetPasswordFlow = () => {
+    setResetForm(EMPTY_RESET)
+    setResetStep('request')
+    setResetToken('')
+    setResetError('')
+    setResetMessage('')
+    setShowResetPass(false)
+  }
+
+  const getAuthErrorMessage = (err, fallback) => {
+    const data = err.response?.data
+    if (typeof data?.detail === 'string') return data.detail
+    if (data && typeof data === 'object') {
+      const first = Object.values(data)[0]
+      if (Array.isArray(first)) return first[0]
+      if (typeof first === 'string') return first
+    }
+    return fallback
+  }
+
+  const handleVerifyRegistrationOtp = async (e) => {
+    e.preventDefault()
+    const otp = regOtp.trim()
+    if (otp.length !== 6) {
+      setRegError('Enter the 6 digit OTP.')
+      return
+    }
+
+    setRegBusy(true)
+    setRegError('')
+    setRegMessage('')
+    try {
+      const user = await verifyStudentRegistrationOtp(regForm.email, otp)
+      resetRegistrationFlow()
+      navigate(ROLE_ROUTES[user.role?.name] || '/student', { replace: true })
+    } catch (err) {
+      setRegError(getAuthErrorMessage(err, 'Invalid or expired OTP.'))
+    } finally {
+      setRegBusy(false)
+    }
+  }
+
+  const handleSendResetOtp = async (e) => {
+    e.preventDefault()
+    const identifier = resetForm.identifier.trim()
+    if (!identifier) {
+      setResetError('Enter your username or email.')
+      return
+    }
+
+    setResetBusy(true)
+    setResetError('')
+    setResetMessage('')
+    try {
+      const { data } = await forgotPassword(identifier)
+      setResetForm((prev) => ({ ...prev, identifier }))
+      setResetMessage(data.detail || 'Reset code sent.')
+      setResetStep('verify')
+    } catch (err) {
+      setResetError(getAuthErrorMessage(err, 'Could not send OTP. Please try again.'))
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  const handleVerifyResetOtp = async (e) => {
+    e.preventDefault()
+    const identifier = resetForm.identifier.trim()
+    const otp = resetForm.otp.trim()
+    if (!otp) {
+      setResetError('Enter the OTP from your email.')
+      return
+    }
+
+    setResetBusy(true)
+    setResetError('')
+    setResetMessage('')
+    try {
+      const { data } = await verifyResetOtp(identifier, otp)
+      setResetToken(data.reset_token || '')
+      setResetMessage(data.detail || 'OTP verified. Enter your new password.')
+      setResetStep('reset')
+    } catch (err) {
+      setResetError(getAuthErrorMessage(err, 'Invalid or expired OTP.'))
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault()
+    if (!resetToken) {
+      setResetError('Verify OTP before resetting password.')
+      return
+    }
+    if (resetForm.password !== resetForm.confirm_password) {
+      setResetError('Passwords do not match.')
+      return
+    }
+
+    setResetBusy(true)
+    setResetError('')
+    setResetMessage('')
+    try {
+      await resetPassword(resetForm.identifier.trim(), resetToken, resetForm.password, resetForm.confirm_password)
+      resetPasswordFlow()
+      setTab('login')
+      setLoginError('')
+      setLoginInfo('Password reset successfully. Please log in with your new password.')
+      setDeactivatedMsg('')
+      setLoginForm({ username: '', password: '' })
+    } catch (err) {
+      setResetError(getAuthErrorMessage(err, 'Could not reset password. Please try again.'))
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  const switchTab = (nextTab) => {
+    setTab(nextTab)
+    setLoginError('')
+    setLoginInfo('')
+    setRegError('')
+    setDeactivatedMsg('')
+    if (nextTab !== 'register') resetRegistrationFlow()
+    if (nextTab !== 'forgot') resetPasswordFlow()
+  }
 
   const submitBtnStyle = (busy) => ({
     width: '100%', border: 'none', borderRadius: '16px',
@@ -429,10 +615,10 @@ export default function LoginPage() {
                 }}>C</div>
                 <div>
                   <div style={{ color: '#fff5e1', fontWeight: 700, fontSize: tab === 'register' ? '17px' : '22px' }}>
-                    {tab === 'login' ? 'Login' : 'Create Account'}
+                    {tab === 'login' ? 'Login' : tab === 'forgot' ? 'Reset Password' : 'Create Account'}
                   </div>
                   <div style={{ color: 'rgba(255,234,205,0.72)', fontSize: '12px' }}>
-                    Access the Cafe Lush management platform
+                    {tab === 'forgot' ? 'Verify your OTP before choosing a new password' : 'Access the Cafe Lush management platform'}
                   </div>
                 </div>
               </div>
@@ -451,6 +637,11 @@ export default function LoginPage() {
             {/* ── LOGIN ── */}
             {tab === 'login' && (
               <>
+                {loginInfo && (
+                  <div style={{ marginBottom: '16px', borderRadius: '14px', padding: '12px 14px', background: 'rgba(32,128,84,0.16)', border: '1px solid rgba(126,220,170,0.26)', color: '#d8ffe9', fontSize: '13px' }}>
+                    {loginInfo}
+                  </div>
+                )}
                 {loginError && <div style={errorBoxStyle}>{loginError}</div>}
 
                 {deactivatedMsg && (
@@ -485,6 +676,15 @@ export default function LoginPage() {
                       </button>
                     }
                   />
+                  <div style={{ textAlign: 'right', marginTop: '-8px', marginBottom: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() => switchTab('forgot')}
+                      style={{ border: 'none', background: 'transparent', color: '#f0c570', fontWeight: 700, cursor: 'pointer', padding: 0, fontSize: '12px', fontFamily: "'DM Sans', sans-serif" }}
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
                   <button type="submit" disabled={loading} style={submitBtnStyle(loading)}>
                     {loading ? <Spinner size="sm" /> : null}
                     {loading ? 'Signing in...' : 'Login'}
@@ -512,6 +712,108 @@ export default function LoginPage() {
               </>
             )}
 
+            {/* ── FORGOT PASSWORD ── */}
+            {tab === 'forgot' && (
+              <>
+                <p style={{ color: 'rgba(255,237,212,0.78)', fontSize: '13px', marginTop: 0, marginBottom: '14px', lineHeight: 1.6 }}>
+                  Enter your username to receive an OTP. If an email is shared by multiple staff accounts, use the username.
+                </p>
+
+                {resetError && <div style={errorBoxStyle}>{resetError}</div>}
+                {resetMessage && (
+                  <div style={{ marginBottom: '16px', borderRadius: '14px', padding: '12px 14px', background: 'rgba(32,128,84,0.16)', border: '1px solid rgba(126,220,170,0.26)', color: '#d8ffe9', fontSize: '13px' }}>
+                    {resetMessage}
+                  </div>
+                )}
+
+                {resetStep === 'request' && (
+                  <form onSubmit={handleSendResetOtp}>
+                    <InputField
+                      label="Username or Email"
+                      icon={<IconUser />}
+                      placeholder="Enter your username or unique email"
+                      value={resetForm.identifier}
+                      onChange={(e) => setResetForm({ ...resetForm, identifier: e.target.value })}
+                      required
+                      autoFocus
+                    />
+                    <button type="submit" disabled={resetBusy} style={submitBtnStyle(resetBusy)}>
+                      {resetBusy ? <Spinner size="sm" /> : null}
+                      {resetBusy ? 'Sending OTP...' : 'Send OTP'}
+                    </button>
+                  </form>
+                )}
+
+                {resetStep === 'verify' && (
+                  <form onSubmit={handleVerifyResetOtp}>
+                    <InputField
+                      label="OTP"
+                      icon={<IconLock />}
+                      placeholder="Enter 6 digit OTP"
+                      value={resetForm.otp}
+                      onChange={(e) => setResetForm({ ...resetForm, otp: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                      required
+                      autoFocus
+                    />
+                    <button type="submit" disabled={resetBusy} style={submitBtnStyle(resetBusy)}>
+                      {resetBusy ? <Spinner size="sm" /> : null}
+                      {resetBusy ? 'Verifying...' : 'Verify OTP'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setResetStep('request'); setResetToken(''); setResetError(''); setResetMessage('') }}
+                      style={{ marginTop: '12px', width: '100%', border: '1px solid rgba(255,227,182,0.22)', borderRadius: '14px', padding: '12px', background: 'rgba(255,255,255,0.06)', color: '#f0c570', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif" }}
+                    >
+                      Send a new OTP
+                    </button>
+                  </form>
+                )}
+
+                {resetStep === 'reset' && (
+                  <form onSubmit={handleResetPassword}>
+                    <InputField
+                      label="New Password"
+                      icon={<IconLock />}
+                      type={showResetPass ? 'text' : 'password'}
+                      placeholder="Enter new password"
+                      value={resetForm.password}
+                      onChange={(e) => setResetForm({ ...resetForm, password: e.target.value })}
+                      required
+                      minLength={6}
+                      autoFocus
+                      rightElement={
+                        <button type="button" onClick={() => setShowResetPass(!showResetPass)} style={eyeBtnStyle}>
+                          {showResetPass ? <IconEyeOff /> : <IconEye />}
+                        </button>
+                      }
+                    />
+                    <InputField
+                      label="Confirm Password"
+                      icon={<IconLock />}
+                      type={showResetPass ? 'text' : 'password'}
+                      placeholder="Re-enter new password"
+                      value={resetForm.confirm_password}
+                      onChange={(e) => setResetForm({ ...resetForm, confirm_password: e.target.value })}
+                      required
+                      minLength={6}
+                    />
+                    <button type="submit" disabled={resetBusy} style={submitBtnStyle(resetBusy)}>
+                      {resetBusy ? <Spinner size="sm" /> : null}
+                      {resetBusy ? 'Resetting...' : 'Reset Password'}
+                    </button>
+                  </form>
+                )}
+
+                <p style={{ textAlign: 'center', marginTop: '14px', marginBottom: 0, color: 'rgba(255,233,201,0.68)', fontSize: '12px' }}>
+                  Remembered your password?{' '}
+                  <button type="button" onClick={() => switchTab('login')}
+                    style={{ border: 'none', background: 'transparent', color: '#f0c570', fontWeight: 700, cursor: 'pointer', padding: 0, textDecoration: 'underline', fontFamily: "'DM Sans', sans-serif" }}>
+                    Back to login
+                  </button>
+                </p>
+              </>
+            )}
+
             {/* ── REGISTER ── */}
             {tab === 'register' && (
               <>
@@ -520,41 +822,66 @@ export default function LoginPage() {
                 </p>
 
                 {regError && <div style={{ ...errorBoxStyle, padding: '8px 12px', fontSize: '12px', marginBottom: '10px' }}>{regError}</div>}
-
-                <form onSubmit={handleRegister}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <InputField compact label="Full Name" icon={<IconUser />} placeholder="Enter your full name"
-                        value={regForm.full_name} onChange={(e) => setRegForm({ ...regForm, full_name: e.target.value })} required />
-                    </div>
-                    <InputField compact label="Username" icon={<IconUser />} placeholder="Choose a username"
-                      value={regForm.username} onChange={(e) => setRegForm({ ...regForm, username: e.target.value })} required />
-                    <InputField compact label="Contact" icon={<IconPhone />} placeholder="07xxxxxxxx"
-                      value={regForm.contact} onChange={(e) => setRegForm({ ...regForm, contact: e.target.value })} />
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Enter email address"
-                        value={regForm.email} onChange={(e) => setRegForm({ ...regForm, email: e.target.value })} />
-                    </div>
-                    <InputField compact label="Password" icon={<IconLock />}
-                      type={showRegPass ? 'text' : 'password'} placeholder="Min 6 characters"
-                      value={regForm.password} onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
-                      required minLength={6}
-                      rightElement={
-                        <button type="button" onClick={() => setShowRegPass(!showRegPass)} style={eyeBtnStyle}>
-                          {showRegPass ? <IconEyeOff /> : <IconEye />}
-                        </button>
-                      }
-                    />
-                    <InputField compact label="Confirm Password" icon={<IconLock />}
-                      type={showRegPass ? 'text' : 'password'} placeholder="Repeat password"
-                      value={regForm.confirm_password} onChange={(e) => setRegForm({ ...regForm, confirm_password: e.target.value })} required />
+                {regMessage && (
+                  <div style={{ marginBottom: '10px', borderRadius: '14px', padding: '8px 12px', background: 'rgba(32,128,84,0.16)', border: '1px solid rgba(126,220,170,0.26)', color: '#d8ffe9', fontSize: '12px' }}>
+                    {regMessage}
                   </div>
+                )}
 
-                  <button type="submit" disabled={regBusy} style={{ ...submitBtnStyle(regBusy), padding: '11px 18px', marginTop: '6px', fontSize: '14px' }}>
-                    {regBusy ? <Spinner size="sm" /> : null}
-                    {regBusy ? 'Creating account...' : 'Create Student Account'}
-                  </button>
-                </form>
+                {regStep === 'form' ? (
+                  <form onSubmit={handleRegister}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <InputField compact label="Full Name" icon={<IconUser />} placeholder="Enter your full name"
+                          value={regForm.full_name} onChange={(e) => setRegForm({ ...regForm, full_name: e.target.value })} required />
+                      </div>
+                      <InputField compact label="Username" icon={<IconUser />} placeholder="Choose a username"
+                        value={regForm.username} onChange={(e) => setRegForm({ ...regForm, username: e.target.value })} required />
+                      <InputField compact label="Contact" icon={<IconPhone />} placeholder="07xxxxxxxx"
+                        value={regForm.contact} onChange={(e) => setRegForm({ ...regForm, contact: e.target.value })} />
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Enter email address"
+                          value={regForm.email} onChange={(e) => setRegForm({ ...regForm, email: e.target.value })} required />
+                      </div>
+                      <InputField compact label="Password" icon={<IconLock />}
+                        type={showRegPass ? 'text' : 'password'} placeholder="Min 6 characters"
+                        value={regForm.password} onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
+                        required minLength={6}
+                        rightElement={
+                          <button type="button" onClick={() => setShowRegPass(!showRegPass)} style={eyeBtnStyle}>
+                            {showRegPass ? <IconEyeOff /> : <IconEye />}
+                          </button>
+                        }
+                      />
+                      <InputField compact label="Confirm Password" icon={<IconLock />}
+                        type={showRegPass ? 'text' : 'password'} placeholder="Repeat password"
+                        value={regForm.confirm_password} onChange={(e) => setRegForm({ ...regForm, confirm_password: e.target.value })} required />
+                    </div>
+
+                    <button type="submit" disabled={regBusy} style={{ ...submitBtnStyle(regBusy), padding: '11px 18px', marginTop: '6px', fontSize: '14px' }}>
+                      {regBusy ? <Spinner size="sm" /> : null}
+                      {regBusy ? 'Sending OTP...' : 'Send Email OTP'}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyRegistrationOtp}>
+                    <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Email address"
+                      value={regForm.email} onChange={() => {}} required />
+                    <InputField compact label="OTP" icon={<IconLock />} placeholder="Enter 6 digit OTP"
+                      value={regOtp} onChange={(e) => setRegOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} required autoFocus />
+                    <button type="submit" disabled={regBusy} style={{ ...submitBtnStyle(regBusy), padding: '11px 18px', marginTop: '6px', fontSize: '14px' }}>
+                      {regBusy ? <Spinner size="sm" /> : null}
+                      {regBusy ? 'Verifying...' : 'Verify OTP & Create Account'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setRegStep('form'); setRegOtp(''); setRegError(''); setRegMessage('') }}
+                      style={{ marginTop: '10px', width: '100%', border: '1px solid rgba(255,227,182,0.22)', borderRadius: '14px', padding: '10px', background: 'rgba(255,255,255,0.06)', color: '#f0c570', fontWeight: 700, cursor: 'pointer', fontFamily: "'DM Sans', sans-serif", fontSize: '13px' }}
+                    >
+                      Edit details or resend OTP
+                    </button>
+                  </form>
+                )}
 
                 <p style={{ textAlign: 'center', marginTop: '12px', marginBottom: 0, color: 'rgba(255,233,201,0.68)', fontSize: '12px' }}>
                   Already have an account?{' '}

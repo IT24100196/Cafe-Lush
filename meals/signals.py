@@ -3,6 +3,7 @@ from django.dispatch import receiver
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from .models import MealOrder
+from .order_reference import build_order_reference
 
 ORDERS_GROUP = 'orders_room'
 
@@ -31,9 +32,12 @@ def _order_payload(order):
         'quantity':       order.quantity,
         'delivery_type':  order.delivery_type,
         'delivery_address': order.delivery_address,
+        'delivery_fee':   str(order.delivery_fee),
         'phone_number':   order.phone_number,
         'status':         order.status,
         'session_id':     order.session_id,
+        'order_reference': build_order_reference(order),
+        'bill_number':    order.bill.bill_number if hasattr(order, 'bill') else '',
         'order_date':     str(order.order_date),
         'created_at':     order.created_at.isoformat(),
     }

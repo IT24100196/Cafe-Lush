@@ -19,6 +19,18 @@ export async function studentRegister(data) {
   return res.user
 }
 
+export function requestStudentRegistrationOtp(data) {
+  return axios.post(`${BASE_URL}/auth/register/student/request-otp/`, data)
+}
+
+export async function verifyStudentRegistrationOtp(email, otp) {
+  const { data } = await axios.post(`${BASE_URL}/auth/register/student/verify/`, { email, otp })
+  localStorage.setItem('access',  data.access)
+  localStorage.setItem('refresh', data.refresh)
+  localStorage.setItem('user',    JSON.stringify(data.user))
+  return data.user
+}
+
 /**
  * POST /auth/login/
  * Returns { access, refresh, user }
@@ -30,6 +42,23 @@ export async function login(username, password) {
   localStorage.setItem('refresh', data.refresh)
   localStorage.setItem('user',    JSON.stringify(data.user))
   return data.user
+}
+
+export function forgotPassword(identifier) {
+  return axios.post(`${BASE_URL}/auth/forgot-password/`, { identifier })
+}
+
+export function verifyResetOtp(identifier, otp) {
+  return axios.post(`${BASE_URL}/auth/verify-reset-otp/`, { identifier, otp })
+}
+
+export function resetPassword(identifier, resetToken, password, confirmPassword) {
+  return axios.post(`${BASE_URL}/auth/reset-password/`, {
+    identifier,
+    reset_token: resetToken,
+    password,
+    confirm_password: confirmPassword,
+  })
 }
 
 /**

@@ -1,7 +1,27 @@
 from rest_framework import serializers
 from datetime import timedelta
+from django.core.exceptions import ValidationError as DjangoValidationError
 from pos.models import Item
+from hotel_pos_backend.validators import validate_generic_email_format, validate_sri_lankan_mobile
+from .delivery import (
+    LOCATION_SOURCE_ADDRESS,
+    LOCATION_SOURCE_CURRENT,
+    build_delivery_address,
+    normalize_coordinate,
+)
+from .order_reference import build_order_reference, build_walkin_order_reference
 from .models import MealType, MealOrder, Student, Notification, MealPackage, Bill, Suggestion
+
+
+PACKAGE_READY_TIMES = {
+    'breakfast': '07:30 AM',
+    'dinner': '07:00 PM',
+}
+
+
+def get_package_ready_time(meal_type):
+    meal_name = (getattr(meal_type, 'name', '') or '').strip().lower()
+    return PACKAGE_READY_TIMES.get(meal_name)
 
 
 class MealTypeSerializer(serializers.ModelSerializer):
@@ -21,7 +41,7 @@ class MealPackageSerializer(serializers.ModelSerializer):
     meal_type_name = serializers.CharField(source='meal_type.name', read_only=True)
     day_label      = serializers.CharField(source='get_day_of_week_display', read_only=True)
     item_ids       = serializers.PrimaryKeyRelatedField(
-        queryset=Item.objects.all(), many=True, required=False, source='items', write_only=True
+        queryset=Item.objects.filter(is_available=True, category__is_active=True), many=True, required=False, source='items', write_only=True
     )
 
     class Meta:
@@ -49,13 +69,17 @@ class MealOrderSerializer(serializers.ModelSerializer):
     pickup_time    = serializers.SerializerMethodField()
     package_label  = serializers.SerializerMethodField()
     unit_price     = serializers.SerializerMethodField()
+    order_reference = serializers.SerializerMethodField()
+    bill_number    = serializers.SerializerMethodField()
 
     class Meta:
         model  = MealOrder
         fields = ['id', 'student', 'student_name', 'meal_type', 'meal_type_name',
                   'item', 'item_name', 'order_type', 'order_date', 'preference',
-                  'delivery_type', 'quantity', 'delivery_address', 'phone_number',
-                  'student_email', 'status', 'session_id', 'pickup_time',
+                  'delivery_type', 'quantity', 'delivery_address',
+                  'address_line_1', 'address_line_2', 'city_area', 'location_source',
+                  'delivery_latitude', 'delivery_longitude', 'delivery_fee', 'phone_number',
+                  'student_email', 'status', 'session_id', 'order_reference', 'bill_number', 'pickup_time',
                   'package_label', 'unit_price', 'created_at']
         read_only_fields = ['student', 'status', 'session_id', 'created_at']
         extra_kwargs = {
@@ -65,21 +89,89 @@ class MealOrderSerializer(serializers.ModelSerializer):
             'preference':    {'required': False},
         }
 
+    def validate_quantity(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Quantity must be greater than 0.')
+        return value
+
+    def validate_student_email(self, value):
+        try:
+            return validate_generic_email_format(value, required=False) or ''
+        except DjangoValidationError as exc:
+            message = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
+            raise serializers.ValidationError(message)
+
+    def validate_phone_number(self, value):
+        try:
+            return validate_sri_lankan_mobile(value, required=False, label='Phone number')
+        except DjangoValidationError as exc:
+            message = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
+            raise serializers.ValidationError(message)
+
     def validate(self, data):
         order_type = data.get('order_type', 'package')
+        phone_number = (data.get('phone_number') or '').strip()
+        delivery_type = (data.get('delivery_type') or 'takeaway').strip().lower()
+        address_line_1 = (data.get('address_line_1') or '').strip()
+        address_line_2 = (data.get('address_line_2') or '').strip()
+        city_area = (data.get('city_area') or '').strip()
+        location_source = (data.get('location_source') or LOCATION_SOURCE_ADDRESS).strip() or LOCATION_SOURCE_ADDRESS
+        delivery_address = (data.get('delivery_address') or '').strip()
+        delivery_latitude = normalize_coordinate(data.get('delivery_latitude'), 'Latitude')
+        delivery_longitude = normalize_coordinate(data.get('delivery_longitude'), 'Longitude')
+
+        data['phone_number'] = phone_number
+        data['address_line_1'] = address_line_1
+        data['address_line_2'] = address_line_2
+        data['city_area'] = city_area
+        data['location_source'] = location_source
+        data['delivery_latitude'] = delivery_latitude
+        data['delivery_longitude'] = delivery_longitude
+
+        if delivery_type == 'delivery':
+            if not address_line_1:
+                raise serializers.ValidationError({'address_line_1': 'Address line 1 is required for delivery orders.'})
+            if not city_area:
+                raise serializers.ValidationError({'city_area': 'City or area is required for delivery orders.'})
+            delivery_address = build_delivery_address(address_line_1, address_line_2, city_area)
+            if location_source == LOCATION_SOURCE_CURRENT and (delivery_latitude is None or delivery_longitude is None):
+                raise serializers.ValidationError({'detail': 'Current location is required to calculate the delivery fee.'})
+            if location_source != LOCATION_SOURCE_CURRENT:
+                delivery_latitude = None
+                delivery_longitude = None
+                data['delivery_latitude'] = None
+                data['delivery_longitude'] = None
+        else:
+            location_source = LOCATION_SOURCE_ADDRESS
+            delivery_latitude = None
+            delivery_longitude = None
+            data['location_source'] = location_source
+            data['delivery_latitude'] = delivery_latitude
+            data['delivery_longitude'] = delivery_longitude
+
+        data['delivery_address'] = delivery_address
+
         if order_type == 'item':
             if not data.get('item'):
                 raise serializers.ValidationError({'item': 'An item is required for item orders.'})
+            if not phone_number:
+                raise serializers.ValidationError({'phone_number': 'A phone number is required for menu item orders.'})
+            if delivery_type == 'delivery' and not delivery_address:
+                raise serializers.ValidationError({'delivery_address': 'A delivery address is required for delivery orders.'})
         else:
             if not data.get('meal_type'):
                 raise serializers.ValidationError({'meal_type': 'A meal type is required for package orders.'})
-            if data.get('delivery_type') == 'delivery' and not data.get('delivery_address', '').strip():
+            if not phone_number:
+                raise serializers.ValidationError({'phone_number': 'A phone number is required for package orders.'})
+            if delivery_type == 'delivery' and not delivery_address:
                 raise serializers.ValidationError({'delivery_address': 'A delivery address is required for delivery orders.'})
-            if data.get('delivery_type') == 'delivery' and not data.get('phone_number', '').strip():
-                raise serializers.ValidationError({'phone_number': 'A phone number is required for delivery orders.'})
+            if delivery_type == 'delivery' and location_source == LOCATION_SOURCE_CURRENT:
+                raise serializers.ValidationError({'location_source': 'Meal package deliveries must use the typed address only.'})
         return data
 
     def get_pickup_time(self, obj):
+        if obj.order_type == 'package':
+            return get_package_ready_time(obj.meal_type)
         if obj.delivery_type != 'takeaway':
             return None
         pickup = obj.created_at + timedelta(minutes=30)
@@ -101,6 +193,14 @@ class MealOrderSerializer(serializers.ModelSerializer):
             return f'Non-Veg {meal}'
         return meal
 
+    def get_order_reference(self, obj):
+        cache = self.context.setdefault('_order_reference_cache', {})
+        return build_order_reference(obj, cache=cache)
+
+    def get_bill_number(self, obj):
+        bill = getattr(obj, 'bill', None)
+        return bill.bill_number if bill else ''
+
 
 class SuggestionSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.full_name', read_only=True)
@@ -112,7 +212,23 @@ class SuggestionSerializer(serializers.ModelSerializer):
 
 
 class BillSerializer(serializers.ModelSerializer):
+    order_reference = serializers.SerializerMethodField()
+    cashier_name = serializers.CharField(source='cashier.username', read_only=True)
+
+    def get_order_reference(self, obj):
+        if obj.order_reference:
+            return obj.order_reference
+        if obj.source == 'online' and obj.meal_order:
+            cache = self.context.setdefault('_order_reference_cache', {})
+            return build_order_reference(obj.meal_order, cache=cache)
+        if obj.source == 'walk_in':
+            cache = self.context.setdefault('_walkin_order_reference_cache', {})
+            return build_walkin_order_reference(obj, cache=cache)
+        return ''
+
     class Meta:
         model  = Bill
-        fields = ['id', 'bill_number', 'source', 'customer_name', 'meal_order',
-                  'items', 'total_amount', 'sent_to_email', 'generated_at']
+        fields = ['id', 'bill_number', 'order_reference', 'source', 'customer_name', 'meal_order',
+                  'cashier', 'cashier_name',
+                  'items', 'delivery_type', 'delivery_address', 'phone_number',
+                  'subtotal_amount', 'delivery_fee', 'total_amount', 'sent_to_email', 'generated_at']

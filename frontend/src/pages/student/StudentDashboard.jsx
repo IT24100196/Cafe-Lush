@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+﻿import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Bell,
@@ -36,10 +36,11 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import {
-  getMealTypes, getMealOrders, placeMealOrdersBatch,
+  getMealTypes, getMealOrders, placeMealOrdersBatch, estimateDeliveryFee,
   getNotifications, markNotificationsRead, getStudentItems,
-  getWeeklyMealPlan, submitSuggestion, updateProfile, clearOrderHistory,
+  getWeeklyMealPlan, submitSuggestion, updateProfile, clearOrderHistory, cancelStudentOrder,
 } from '../../api/endpoints'
+import { isValidEmail, isValidSriLankanMobile, normalizePhone } from '../../api/validation'
 import { Spinner, Badge, EmptyState, Toast } from '../../components/UI'
 import { useApi } from '../../hooks/useApi'
 import { useCountdown } from '../../hooks/useCountdown'
@@ -75,109 +76,629 @@ function FieldLabel({ children }) {
   )
 }
 
-// ── Delivery helpers ──────────────────────────────────────────────────────────
-const RESTAURANT_LAT = 9.1667
-const RESTAURANT_LNG = 80.4167
-
-function haversine(lat1, lng1, lat2, lng2) {
-  const R = 6371
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLng = (lng2 - lng1) * Math.PI / 180
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+// â”€â”€ Delivery helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const ADDRESS_CORRECTIONS = {
+  'jaffna uni': 'University of Jaffna',
+  'jaffna university': 'University of Jaffna',
+  'thirunalveli': 'Thirunelveli',
+  'thirunelweli': 'Thirunelveli',
+  'thirunaveli': 'Thirunelveli',
+  'tirunelveli': 'Thirunelveli',
+  'univercity of jaffna': 'University of Jaffna',
+  'university jaffna': 'University of Jaffna',
+  'uni of jaffna': 'University of Jaffna',
 }
 
-function getDeliveryCharge(distanceKm) {
-  if (distanceKm <= 2)  return { charge: 0,    label: 'Free' }
-  if (distanceKm <= 5)  return { charge: 150,  label: 'LKR 150' }
-  if (distanceKm <= 10) return { charge: 300,  label: 'LKR 300' }
-  if (distanceKm <= 40) return { charge: 500,  label: 'LKR 500' }
-  return { charge: null, label: 'Outside delivery zone' }
+function normalizeDeliveryAddressPart(value) {
+  let cleaned = String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/(,\s*)+/g, ', ')
+    .replace(/^,\s*|\s*,\s*$/g, '')
+
+  Object.entries(ADDRESS_CORRECTIONS)
+    .sort(([a], [b]) => b.length - a.length)
+    .forEach(([wrong, correct]) => {
+      cleaned = cleaned.replace(new RegExp(`\\b${wrong}\\b`, 'gi'), correct)
+    })
+
+  return cleaned
 }
 
-// ── Delivery Modal ────────────────────────────────────────────────────────────
-function DeliveryModal({ onConfirm, onCancel }) {
-  const [address, setAddress] = useState('')
+function formatDeliveryAddress({ addressLine1 = '', addressLine2 = '', cityArea = '' }) {
+  return [addressLine1, addressLine2, cityArea]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(', ')
+}
+
+function getPackageReadyTime(mealTypeName) {
+  const normalized = String(mealTypeName || '').trim().toLowerCase()
+  if (normalized === 'breakfast') return '7:30 AM'
+  if (normalized === 'dinner') return '7:00 PM'
+  return ''
+}
+
+function getPackageReadyText(mealTypeName) {
+  const readyTime = getPackageReadyTime(mealTypeName)
+  return readyTime
+    ? `Takeaway or delivery at ${readyTime}`
+    : 'Takeaway or delivery at the scheduled time'
+}
+
+const MENU_ITEM_ORDER_HOURS_MESSAGE = 'Menu item orders are available from 4:00 AM to 11:30 PM.'
+
+function isMenuItemOrderOpen(date = new Date()) {
+  const minutes = date.getHours() * 60 + date.getMinutes()
+  return minutes >= 4 * 60 && minutes <= 23 * 60 + 30
+}
+
+function getPackageCancelCutoff(orderDate, mealTypeName) {
+  if (!orderDate) return null
+  const normalized = String(mealTypeName || '').trim().toLowerCase()
+  const cutoff = new Date(`${orderDate}T00:00:00`)
+  if (Number.isNaN(cutoff.getTime())) return null
+
+  if (normalized === 'breakfast') {
+    cutoff.setDate(cutoff.getDate() - 1)
+    cutoff.setHours(21, 0, 0, 0)
+    return cutoff
+  }
+  if (normalized === 'dinner') {
+    cutoff.setHours(23, 0, 0, 0)
+    return cutoff
+  }
+  return null
+}
+
+function getPackageCancelInfo(packageOrder, isCombined = false) {
+  if (!packageOrder) return null
+  const mealName = packageOrder.meal_type_name || 'Meal package'
+  const normalized = mealName.trim().toLowerCase()
+  const cutoff = getPackageCancelCutoff(packageOrder.order_date, mealName)
+  const ruleText = normalized === 'breakfast'
+    ? 'Breakfast package orders can be cancelled before 9:00 PM on the previous day.'
+    : normalized === 'dinner'
+      ? 'Dinner package orders can be cancelled before 11:00 PM on the same day.'
+      : 'This meal package cannot be cancelled online.'
+  const cutoffText = cutoff
+    ? `Cancellation closes at ${cutoff.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })}.`
+    : ''
+  const combinedText = isCombined
+    ? 'Cancelling will cancel the package and all menu items in this order.'
+    : ''
+
+  return {
+    canCancelNow: Boolean(cutoff) && new Date() < cutoff,
+    ruleText,
+    cutoffText,
+    combinedText,
+  }
+}
+
+function OrderMethodModal({ onSelect, onCancel }) {
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onCancel}>
+      <div className="sd-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-modal-header">
+          <h3 className="sd-modal-title">Choose Order Method</h3>
+          <p className="sd-modal-sub">Select how you would like to receive this order.</p>
+        </div>
+
+        <div className="sd-ot-grid">
+          {[
+            { value: 'takeaway', label: 'Takeaway', sub: 'Pick up in about 30 minutes', icon: Package2 },
+            { value: 'delivery', label: 'Delivery', sub: 'Deliver to your address', icon: Truck },
+          ].map(({ value, label, sub, icon }) => {
+            const MethodIcon = icon
+            return (
+              <button
+                key={value}
+                type="button"
+                className="sd-ot-card"
+                style={{ textAlign: 'left' }}
+                onClick={() => onSelect(value)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                  <MethodIcon size={16} strokeWidth={2.2} />
+                  <p className="sd-ot-name" style={{ margin: 0 }}>{label}</p>
+                </div>
+                <p className="sd-ot-sub">{sub}</p>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="sd-modal-footer" style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+          <button type="button" className="sd-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// â”€â”€ Delivery Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function DeliveryModal({
+  onConfirm,
+  onCancel,
+  showQuantity = true,
+  quantityLabel = 'Number of Packages',
+  title = 'Delivery Details',
+  subtitle = 'Enter your delivery information below.',
+  confirmLabel = 'Confirm Delivery',
+  allowCurrentLocation = false,
+  requireFeeEstimate = false,
+  autoEstimateFee = false,
+  hasPackage = false,
+  noticeTitle = 'Add a complete delivery address',
+  noticeText = 'Include your building, room or flat number, street, and area so our delivery team can find you easily.',
+  deliveryIncludedText = '',
+}) {
+  const [addressLine1, setAddressLine1] = useState('')
+  const [addressLine2, setAddressLine2] = useState('')
+  const [cityArea, setCityArea] = useState('')
   const [phone, setPhone] = useState('')
   const [qty, setQty] = useState(1)
-  const [geoState, setGeoState] = useState('idle') // idle | loading | done | error
-  const [distanceInfo, setDistanceInfo] = useState(null) // { km, charge, label }
-  const [geoError, setGeoError] = useState('')
+  const [feeState, setFeeState] = useState('idle') // idle | loading | ready | error
+  const [feeInfo, setFeeInfo] = useState(null)
+  const [feeError, setFeeError] = useState('')
+  const [locationSource, setLocationSource] = useState('address')
+  const [coords, setCoords] = useState({ lat: null, lng: null })
+  const [locationRequested, setLocationRequested] = useState(false)
 
-  const formFilled = address.trim() && phone.trim() && qty >= 1
+  const normalizedPhone = normalizePhone(phone)
+  const isQtyValid = Number.isInteger(Number(qty)) && Number(qty) > 0
+  const isPhoneValid = isValidSriLankanMobile(phone)
+  const cleanAddressLine1 = normalizeDeliveryAddressPart(addressLine1)
+  const cleanAddressLine2 = normalizeDeliveryAddressPart(addressLine2)
+  const cleanCityArea = normalizeDeliveryAddressPart(cityArea)
+  const hasRequiredAddress = Boolean(cleanAddressLine1) && Boolean(cleanCityArea)
+  const fullAddress = formatDeliveryAddress({
+    addressLine1: cleanAddressLine1,
+    addressLine2: cleanAddressLine2,
+    cityArea: cleanCityArea,
+  })
+  const formValid = hasRequiredAddress && isPhoneValid && (!showQuantity || isQtyValid)
+  const canEstimate = hasRequiredAddress
+  const validationHint = showQuantity
+    ? 'Fill the address, a valid Sri Lankan mobile number, and quantity first'
+    : 'Fill the address and a valid Sri Lankan mobile number first'
 
-  const handleCheckDistance = () => {
+  const resetEstimate = () => {
+    if (!requireFeeEstimate) return
+    setFeeState('idle')
+    setFeeInfo(null)
+    setFeeError('')
+  }
+
+  const handleLocationSourceChange = (source) => {
+    setLocationSource(source)
+    setFeeState('idle')
+    setFeeInfo(null)
+    setFeeError('')
+    if (source === 'address') {
+      setCoords({ lat: null, lng: null })
+      setLocationRequested(false)
+    } else {
+      setLocationRequested(true)
+    }
+  }
+
+  const fetchDeliveryFee = async (source, nextCoords = coords) => {
+    if (!canEstimate) return
+    setFeeState('loading')
+    setFeeError('')
+    try {
+      const payload = {
+        delivery_type: 'delivery',
+        has_package: hasPackage,
+        address_line_1: cleanAddressLine1,
+        address_line_2: cleanAddressLine2,
+        city_area: cleanCityArea,
+        location_source: source,
+      }
+      if (source === 'current_location') {
+        if (nextCoords.lat == null || nextCoords.lng == null) {
+          throw new Error('Current location is required to calculate the delivery fee.')
+        }
+        payload.delivery_latitude = nextCoords.lat
+        payload.delivery_longitude = nextCoords.lng
+      }
+      const { data } = await estimateDeliveryFee(payload)
+      setFeeInfo(data)
+      setFeeState('ready')
+    } catch (err) {
+      setFeeInfo(null)
+      setFeeState('error')
+      setFeeError(err.response?.data?.detail || err.message || 'Failed to calculate the delivery fee.')
+    }
+  }
+
+  const handleUseCurrentLocation = () => {
+    setLocationRequested(true)
     if (!navigator.geolocation) {
-      setGeoError('Geolocation is not supported by your browser.')
+      setFeeState('error')
+      setFeeError('Geolocation is not supported by your browser.')
       return
     }
-    setGeoState('loading')
-    setGeoError('')
+    setFeeState('loading')
+    setFeeError('')
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const km = haversine(RESTAURANT_LAT, RESTAURANT_LNG, pos.coords.latitude, pos.coords.longitude)
-        const { charge, label } = getDeliveryCharge(km)
-        setDistanceInfo({ km, charge, label })
-        setGeoState('done')
+        const nextCoords = {
+          lat: Number(pos.coords.latitude.toFixed(6)),
+          lng: Number(pos.coords.longitude.toFixed(6)),
+        }
+        setCoords(nextCoords)
+        void fetchDeliveryFee('current_location', nextCoords)
       },
       () => {
-        setGeoError('Could not get your location. Please allow location access and try again.')
-        setGeoState('error')
+        setFeeState('error')
+        setFeeError('Could not get your location. Please allow location access and try again.')
       }
     )
   }
 
-  const isOutsideZone = distanceInfo?.charge === null
-  const canConfirm = formFilled && geoState === 'done' && !isOutsideZone
+  useEffect(() => {
+    if (!requireFeeEstimate || !autoEstimateFee) return
+
+    if (!hasRequiredAddress) {
+      setFeeState('idle')
+      setFeeInfo(null)
+      setFeeError('')
+      return
+    }
+
+    if (feeState === 'loading') return
+
+    if (locationSource === 'current_location') {
+      if (coords.lat != null && coords.lng != null) {
+        if (feeState !== 'idle') return
+        const timer = setTimeout(() => {
+          void fetchDeliveryFee('current_location', coords)
+        }, 400)
+        return () => clearTimeout(timer)
+      }
+      if (!locationRequested) return
+      handleUseCurrentLocation()
+      return
+    }
+
+    if (feeState !== 'idle') return
+
+    const timer = setTimeout(() => {
+      void fetchDeliveryFee('address')
+    }, 700)
+
+    return () => clearTimeout(timer)
+  }, [
+    requireFeeEstimate,
+    autoEstimateFee,
+    hasRequiredAddress,
+    addressLine1,
+    addressLine2,
+    cityArea,
+    locationSource,
+    locationRequested,
+    coords.lat,
+    coords.lng,
+    feeState,
+  ])
+
+  const selectedSourceLabel = locationSource === 'current_location' ? 'current location' : 'typed address'
+  const currentLocationReady = locationSource !== 'current_location' || (coords.lat != null && coords.lng != null)
+  const canConfirm = requireFeeEstimate
+    ? formValid && feeState === 'ready' && Boolean(feeInfo) && currentLocationReady
+    : formValid
+
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onCancel}>
+      <div className="sd-modal sd-delivery-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-modal-header">
+          <h3 className="sd-modal-title">{title}</h3>
+          <p className="sd-modal-sub">{subtitle}</p>
+        </div>
+
+        <div className="sd-delivery-modal-body">
+          <div className="sd-delivery-note">
+            <span className="sd-delivery-note-icon">
+              <Truck size={16} strokeWidth={2.2} />
+            </span>
+            <div>
+              <span className="sd-delivery-note-title">{noticeTitle}</span>
+              <span className="sd-delivery-note-text">{noticeText}</span>
+            </div>
+          </div>
+
+          {showQuantity && (
+            <div>
+              <label className="sd-field-label">{quantityLabel}</label>
+              <input
+                className="sd-input sd-quantity-input"
+                type="number"
+                min={1}
+                step={1}
+                value={qty}
+                onChange={(e) => setQty(Number(e.target.value) || 0)}
+              />
+              {!isQtyValid && (
+                <p className="sd-field-error">Quantity must be greater than 0.</p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="sd-field-label">
+              Address Line 1 <span style={{ color: '#E24B4A' }}>*</span>
+            </label>
+            <input
+              className="sd-input"
+              type="text"
+              placeholder="House / building / street"
+              value={addressLine1}
+              onChange={(e) => {
+                setAddressLine1(e.target.value)
+                resetEstimate()
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="sd-field-label">Address Line 2</label>
+            <input
+              className="sd-input"
+              type="text"
+              placeholder="Apartment, floor, block (optional)"
+              value={addressLine2}
+              onChange={(e) => {
+                setAddressLine2(e.target.value)
+                resetEstimate()
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="sd-field-label">
+              City / Area <span style={{ color: '#E24B4A' }}>*</span>
+            </label>
+            <input
+              className="sd-input"
+              type="text"
+              placeholder="Example: Thirunelveli, Jaffna"
+              value={cityArea}
+              onChange={(e) => {
+                setCityArea(e.target.value)
+                resetEstimate()
+              }}
+            />
+          </div>
+
+          <div>
+            <label className="sd-field-label">
+              Phone Number <span style={{ color: '#E24B4A' }}>*</span>
+            </label>
+            <input
+              className="sd-input"
+              type="tel"
+              placeholder="+94 77 123 4567"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            {phone.trim() && !isPhoneValid && (
+              <p className="sd-field-error">
+                Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).
+              </p>
+            )}
+          </div>
+
+          {!requireFeeEstimate && deliveryIncludedText && (
+            <div className="sd-delivery-included">
+              <CheckCircle2 size={16} strokeWidth={2.3} />
+              <span>{deliveryIncludedText}</span>
+            </div>
+          )}
+
+          {requireFeeEstimate && (
+            <div className="sd-delivery-fee">
+              {allowCurrentLocation && (
+                <div className="sd-location-source">
+                  <label className="sd-field-label">Calculate Fee Using</label>
+                  <button
+                    type="button"
+                    className={`sd-location-source-card${locationSource === 'address' ? ' selected' : ''}`}
+                    onClick={() => handleLocationSourceChange('address')}
+                  >
+                    <MapPin size={16} strokeWidth={2.3} />
+                    <span>
+                      <strong>Typed Address</strong>
+                      <em>Use the address fields below.</em>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`sd-location-source-card${locationSource === 'current_location' ? ' selected' : ''}`}
+                    onClick={() => handleLocationSourceChange('current_location')}
+                  >
+                    <MapPinned size={16} strokeWidth={2.3} />
+                    <span>
+                      <strong>Current Location</strong>
+                      <em>Use your device GPS for distance.</em>
+                    </span>
+                  </button>
+                </div>
+              )}
+
+              <label className="sd-field-label">Delivery Charge</label>
+
+              {!autoEstimateFee && (
+                <div className="sd-delivery-fee-actions">
+                  <button
+                    type="button"
+                    className="sd-btn-secondary sd-delivery-fee-btn"
+                    disabled={!canEstimate || feeState === 'loading'}
+                    title={!canEstimate ? 'Fill address line 1 and city / area first' : ''}
+                    onClick={() => void fetchDeliveryFee('address')}
+                  >
+                    <Truck size={15} strokeWidth={2.2} />
+                    Calculate Using Address
+                  </button>
+                  {allowCurrentLocation && (
+                    <button
+                      type="button"
+                      className="sd-btn-secondary sd-delivery-fee-btn"
+                      disabled={!canEstimate || feeState === 'loading'}
+                      title={!canEstimate ? 'Fill address line 1 and city / area first' : ''}
+                      onClick={() => {
+                        handleLocationSourceChange('current_location')
+                        if (canEstimate) handleUseCurrentLocation()
+                      }}
+                    >
+                      <MapPinned size={15} strokeWidth={2.2} />
+                      Use Current Location
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!canEstimate && (
+                <p className="sd-field-hint">
+                  Fill address line 1 and city / area to calculate the delivery fee.
+                </p>
+              )}
+
+              {feeState === 'loading' && (
+                <div className="sd-delivery-loading">
+                  <Spinner size="sm" /> Calculating from your {selectedSourceLabel}...
+                </div>
+              )}
+
+              {feeError && (
+                <p className="sd-field-error">{feeError}</p>
+              )}
+
+              {feeState === 'ready' && feeInfo && (
+                <div className="sd-delivery-fee-result">
+                  {feeInfo.distance_km != null && (
+                    <div className="sd-delivery-fee-row">
+                      <span>Distance</span>
+                      <strong>{Number(feeInfo.distance_km).toFixed(2)} km</strong>
+                    </div>
+                  )}
+                  <div className="sd-delivery-fee-row">
+                    <span>Delivery Charge</span>
+                    <strong className="sd-delivery-fee-total">
+                      {feeInfo.delivery_fee_label}
+                    </strong>
+                  </div>
+                  <div className="sd-field-hint">
+                    Calculated using {feeInfo.location_source === 'current_location' ? 'your current location' : 'the typed address'}.
+                  </div>
+                </div>
+              )}
+
+              {feeState !== 'ready' && canEstimate && !feeError && (
+                <p className="sd-field-hint">
+                  {autoEstimateFee
+                    ? locationSource === 'current_location'
+                      ? 'We will use your device location for distance. The typed address is still needed for the delivery team.'
+                      : 'Delivery fee will calculate automatically after you enter address line 1 and city / area.'
+                    : validationHint}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="sd-modal-footer sd-delivery-modal-footer">
+          <button type="button" className="sd-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="sd-btn-primary"
+            disabled={!canConfirm}
+            onClick={() => {
+              const payload = {
+                delivery_address: fullAddress,
+                address_line_1: cleanAddressLine1,
+                address_line_2: cleanAddressLine2,
+                city_area: cleanCityArea,
+                phone_number: normalizedPhone,
+                location_source: requireFeeEstimate ? locationSource : 'address',
+              }
+              if (requireFeeEstimate && locationSource === 'current_location') {
+                payload.delivery_latitude = coords.lat
+                payload.delivery_longitude = coords.lng
+              }
+              if (showQuantity) payload.quantity = qty
+              onConfirm(payload)
+            }}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function TakeawayModal({
+  onConfirm,
+  onCancel,
+  showQuantity = true,
+  quantityLabel = 'Number of Packages',
+  title = 'Takeaway Details',
+  subtitle = 'Add package quantity and contact details before placing the order.',
+  noteLabel = 'Pickup Person Details (Optional)',
+  notePlaceholder = 'Example: Pickup person name - Nimal, contact - 0771234567',
+  confirmLabel = 'Continue',
+}) {
+  const [qty, setQty] = useState(1)
+  const [phone, setPhone] = useState('')
+  const [pickupNote, setPickupNote] = useState('')
+
+  const normalizedPhone = normalizePhone(phone)
+  const isQtyValid = Number.isInteger(Number(qty)) && Number(qty) > 0
+  const isPhoneValid = isValidSriLankanMobile(phone)
+  const canConfirm = (!showQuantity || isQtyValid) && isPhoneValid
 
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
       <div className="sd-modal" onClick={(e) => e.stopPropagation()}>
         <div className="sd-modal-header">
-          <h3 className="sd-modal-title">Delivery Details</h3>
-          <p className="sd-modal-sub">Enter your delivery information below.</p>
+          <h3 className="sd-modal-title">{title}</h3>
+          <p className="sd-modal-sub">{subtitle}</p>
         </div>
 
-        <div style={{
-          display: 'flex', alignItems: 'flex-start', gap: '10px',
-          background: '#fffbeb', border: '1.5px solid #fcd34d',
-          borderRadius: '10px', padding: '12px 14px', fontSize: '13px', color: '#92400e',
-        }}>
-          <Truck size={16} strokeWidth={2.2} style={{ flexShrink: 0, marginTop: '1px' }} />
+        {showQuantity && (
           <div>
-            <span style={{ fontWeight: 700, display: 'block', marginBottom: '3px' }}>Please enter your actual delivery address</span>
-            <span style={{ fontWeight: 400, lineHeight: 1.5 }}>
-              Make sure to include your building name, room/flat number, street, and any landmark so our delivery team can find you easily.
-            </span>
+            <label className="sd-field-label">
+              {quantityLabel} <span style={{ color: '#E24B4A' }}>*</span>
+            </label>
+            <input
+              className="sd-input"
+              style={{ width: '120px' }}
+              type="number"
+              min={1}
+              step={1}
+              value={qty}
+              onChange={(e) => setQty(Number(e.target.value) || 0)}
+            />
+            {!isQtyValid && (
+              <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>Quantity must be greater than 0.</p>
+            )}
           </div>
-        </div>
-
-        <div>
-          <label className="sd-field-label">Number of Packages</label>
-          <input
-            className="sd-input"
-            style={{ width: '100px' }}
-            type="number"
-            min={1}
-            value={qty}
-            onChange={(e) => setQty(Number(e.target.value))}
-          />
-        </div>
-
-        <div>
-          <label className="sd-field-label">
-            Delivery Address <span style={{ color: '#E24B4A' }}>*</span>
-          </label>
-          <textarea
-            className="sd-input"
-            style={{ resize: 'none' }}
-            rows={3}
-            placeholder="Enter your full delivery address…"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-          />
-        </div>
+        )}
 
         <div>
           <label className="sd-field-label">
@@ -190,66 +711,23 @@ function DeliveryModal({ onConfirm, onCancel }) {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
           />
+          {phone.trim() && !isPhoneValid && (
+            <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>
+              Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).
+            </p>
+          )}
         </div>
 
-        {/* ── Delivery Charge Step ── */}
-        <div style={{ marginTop: '4px' }}>
-          <label className="sd-field-label">Delivery Charge</label>
-          {geoState === 'idle' || geoState === 'error' ? (
-            <>
-              <button
-                type="button"
-                className="sd-btn-secondary"
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
-                disabled={!formFilled}
-                title={!formFilled ? 'Fill in address and phone first' : ''}
-                onClick={handleCheckDistance}
-              >
-                <MapPinned size={15} strokeWidth={2.2} />
-                Check Delivery Charge
-              </button>
-              {geoError && (
-                <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>{geoError}</p>
-              )}
-              {!formFilled && (
-                <p style={{ fontSize: '11px', color: T.textMuted, marginTop: '5px' }}>Fill in address &amp; phone first</p>
-              )}
-            </>
-          ) : geoState === 'loading' ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: T.textMuted }}>
-              <Spinner size="sm" /> Detecting your location…
-            </div>
-          ) : (
-            <div style={{
-              borderRadius: '10px',
-              border: `1.5px solid ${isOutsideZone ? '#fca5a5' : '#86efac'}`,
-              background: isOutsideZone ? '#fef2f2' : '#f0fdf4',
-              padding: '12px 14px',
-              fontSize: '13px',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                <span style={{ color: T.textMuted, fontWeight: 600 }}>Distance</span>
-                <span style={{ fontWeight: 700, color: T.espresso }}>{distanceInfo.km.toFixed(2)} km</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                <span style={{ color: T.textMuted, fontWeight: 600 }}>Zone</span>
-                <span style={{ fontWeight: 700, color: T.espresso }}>
-                  {distanceInfo.km <= 2 ? '0–2 km' : distanceInfo.km <= 5 ? '2–5 km' : distanceInfo.km <= 10 ? '5–10 km' : distanceInfo.km <= 40 ? '10–40 km' : 'Beyond 40 km'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: T.textMuted, fontWeight: 600 }}>Delivery Charge</span>
-                <span style={{ fontWeight: 800, color: isOutsideZone ? '#dc2626' : '#16a34a' }}>
-                  {distanceInfo.label}
-                </span>
-              </div>
-              {isOutsideZone && (
-                <p style={{ marginTop: '8px', fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>
-                  Sorry, your location is outside our delivery zone (max 40 km).
-                </p>
-              )}
-            </div>
-          )}
+        <div>
+          <label className="sd-field-label">{noteLabel}</label>
+          <textarea
+            className="sd-input"
+            rows={3}
+            style={{ resize: 'none' }}
+            placeholder={notePlaceholder}
+            value={pickupNote}
+            onChange={(e) => setPickupNote(e.target.value)}
+          />
         </div>
 
         <div className="sd-modal-footer" style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
@@ -260,15 +738,16 @@ function DeliveryModal({ onConfirm, onCancel }) {
             type="button"
             className="sd-btn-primary"
             disabled={!canConfirm}
-            onClick={() =>
-              onConfirm({
-                quantity: qty,
-                delivery_address: address.trim(),
-                phone_number: phone.trim(),
-              })
-            }
+            onClick={() => {
+              const payload = {
+                phone_number: normalizedPhone,
+                pickup_note: pickupNote.trim(),
+              }
+              if (showQuantity) payload.quantity = qty
+              onConfirm(payload)
+            }}
           >
-            Confirm Delivery
+            {confirmLabel}
           </button>
         </div>
       </div>
@@ -277,7 +756,7 @@ function DeliveryModal({ onConfirm, onCancel }) {
   )
 }
 
-// ── Cutoff helper ─────────────────────────────────────────────────────────────
+// â”€â”€ Cutoff helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function getCutoffDate(mealTypeName, orderDate) {
   if (!mealTypeName || !orderDate) return null
   const date = new Date(orderDate)
@@ -299,7 +778,7 @@ function getCutoffDate(mealTypeName, orderDate) {
   return null
 }
 
-// ── Today's Meal Modal ───────────────────────────────────────────────────────
+// â”€â”€ Today's Meal Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 const SLOT_META = {
@@ -340,14 +819,36 @@ const SLOT_META = {
   },
 }
 
+function toInputDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDays(date, days) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
 function TodayMealModal({ plan, onClose }) {
-  const todayJs = new Date().getDay()
-  const todayKey = todayJs === 0 ? 6 : todayJs - 1
-  const dayName = DAY_NAMES[todayKey]
+  const today = new Date()
+  const todayDate = toInputDate(today)
+  const maxPackageDate = toInputDate(addDays(today, 3))
+  const [selectedDate, setSelectedDate] = useState(todayDate)
+  const selectedDateObj = new Date(`${selectedDate}T00:00:00`)
+  const selectedDayJs = Number.isNaN(selectedDateObj.getTime()) ? new Date().getDay() : selectedDateObj.getDay()
+  const selectedDayKey = selectedDayJs === 0 ? 6 : selectedDayJs - 1
+  const dayName = DAY_NAMES[selectedDayKey]
+  const isToday = selectedDate === todayDate
+  const selectedDateLabel = Number.isNaN(selectedDateObj.getTime())
+    ? dayName
+    : selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 
   const slots = Object.values(plan).filter((s) => {
-    if (s.meal_time === 'lunch') return (todayKey === 5 || todayKey === 6) && s.day_of_week === 5
-    return s.day_of_week === todayKey
+    if (s.meal_time === 'lunch') return (selectedDayKey === 5 || selectedDayKey === 6) && s.day_of_week === 5
+    return s.day_of_week === selectedDayKey
   })
 
   const ORDER = ['breakfast_veg', 'breakfast_nonveg', 'dinner_veg', 'dinner_nonveg', 'lunch_nonveg']
@@ -368,11 +869,29 @@ function TodayMealModal({ plan, onClose }) {
         >
           <div>
             <h3 className="sd-modal-title" style={{ fontSize: '15px' }}>
-              Today's Meal Packages
+              Meal Packages
             </h3>
             <p className="sd-modal-sub" style={{ fontSize: '12px' }}>
-              {dayName} — available packages for today
+              {isToday ? `${dayName} - available packages for today` : `${selectedDateLabel} - available packages`}
             </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+              <CalendarDays size={14} strokeWidth={2.2} color={T.textMuted} />
+              <input
+                type="date"
+                min={todayDate}
+                max={maxPackageDate}
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                style={{
+                  borderRadius: '8px',
+                  border: '1.5px solid #e5d8c8',
+                  background: '#fff',
+                  padding: '4px 8px',
+                  fontSize: '12px',
+                  color: T.espresso,
+                }}
+              />
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -393,7 +912,7 @@ function TodayMealModal({ plan, onClose }) {
 
         {sorted.length === 0 ? (
           <p style={{ textAlign: 'center', color: T.textMuted, padding: '32px 0', fontSize: '13px' }}>
-            No meal packages configured for today.
+            No meal packages configured for this date.
           </p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -480,39 +999,36 @@ function TodayMealModal({ plan, onClose }) {
   )
 }
 
-// ── Add Menu Items prompt ─────────────────────────────────────────────────────
-function AddMenuItemsPrompt({ onYes, onNo }) {
+// â”€â”€ Add Menu Items prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function AddMenuItemsPrompt({ onAddItems, onPlaceOnly, onCancel }) {
   return createPortal(
-    <div className="sd-modal-overlay" onClick={onNo}>
-      <div className="sd-modal" style={{ maxWidth: '380px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '14px' }}>
-          <div
-            style={{
-              width: '56px',
-              height: '56px',
-              borderRadius: '16px',
-              background: T.creamLight,
-              border: `1.5px solid ${T.creamDark}`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <UtensilsCrossed size={28} color={T.espresso} strokeWidth={2.2} />
-          </div>
+    <div className="sd-modal-overlay" onClick={onCancel}>
+      <div className="sd-modal sd-package-prompt" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-package-prompt-icon">
+          <Package2 size={30} strokeWidth={2.2} />
         </div>
 
-        <h3 className="sd-modal-title" style={{ marginBottom: '8px' }}>Add Menu Items?</h3>
-        <p className="sd-modal-sub" style={{ marginBottom: '24px' }}>
-          Would you like to add menu items from our café to this order?
+        <h3 className="sd-package-prompt-title">Package Details Ready</h3>
+        <p className="sd-package-prompt-text">
+          Your meal package details are saved for this checkout. Add cafe items to the same order, or place the package only now.
         </p>
 
-        <div className="sd-modal-footer" style={{ justifyContent: 'center' }}>
-          <button type="button" className="sd-btn-secondary" onClick={onNo}>
-            No, Place Order
+        <div className="sd-package-prompt-note">
+          <CheckCircle2 size={15} strokeWidth={2.3} />
+          <span>No extra delivery fee is added for this meal package checkout.</span>
+        </div>
+
+        <div className="sd-package-prompt-actions">
+          <button type="button" className="sd-btn-primary sd-package-prompt-primary" onClick={onAddItems}>
+            <ShoppingCart size={16} strokeWidth={2.3} />
+            Add Cafe Items
           </button>
-          <button type="button" className="sd-btn-primary" onClick={onYes}>
-            Yes, Add Items
+          <button type="button" className="sd-btn-secondary sd-package-prompt-secondary" onClick={onPlaceOnly}>
+            <Package2 size={15} strokeWidth={2.3} />
+            Place Package Only
+          </button>
+          <button type="button" className="sd-package-prompt-back" onClick={onCancel}>
+            Back
           </button>
         </div>
       </div>
@@ -521,8 +1037,126 @@ function AddMenuItemsPrompt({ onYes, onNo }) {
   )
 }
 
-// ── Panel 1 — Meal Packages ───────────────────────────────────────────────────
-function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan }) {
+function formatOrderSuccessDate(value) {
+  if (!value) return ''
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function formatDeliveryFeeLabel(value, fallback = '') {
+  if (value === null || value === undefined || value === '') return fallback
+  const fee = Number(value)
+  if (!Number.isFinite(fee)) return fallback
+  return fee === 0 ? 'Free' : `LKR ${fee.toFixed(2)}`
+}
+
+function getPackageSummaryLine(payload, mealTypes = []) {
+  const mealType = mealTypes.find((type) => Number(type.id) === Number(payload?.meal_type))
+  const mealName = mealType?.name || 'Meal Package'
+  const preference = payload?.preference === 'non-veg' ? 'Non-Veg' : payload?.preference === 'veg' ? 'Veg' : ''
+  return {
+    name: preference ? `${preference} ${mealName}` : mealName,
+    qty: Number(payload?.quantity) || 1,
+    date: payload?.order_date || '',
+  }
+}
+
+function getPackageReadyTextFromPayload(payload, mealTypes = []) {
+  const mealType = mealTypes.find((type) => Number(type.id) === Number(payload?.meal_type))
+  return getPackageReadyText(mealType?.name)
+}
+
+function OrderSuccessModal({ order, onClose, onViewHistory }) {
+  if (!order) return null
+
+  const isDelivery = order.method === 'delivery'
+  const methodLabel = isDelivery ? 'Delivery' : 'Takeaway'
+  const methodDetail = isDelivery
+    ? order.deliveryAddress || 'Delivery address saved'
+    : order.pickupDetails || 'Pickup from Cafe Lush'
+
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onClose}>
+      <div className="sd-modal sd-order-success-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-order-success-hero">
+          <div className="sd-order-success-icon">
+            <CheckCircle2 size={34} strokeWidth={2.25} />
+          </div>
+          <p className="sd-order-success-kicker">Order Submitted</p>
+          <h3 className="sd-order-success-title">{order.title}</h3>
+          <p className="sd-order-success-text">{order.message}</p>
+        </div>
+
+        <div className="sd-order-success-body">
+          <div className="sd-order-success-section">
+            <div className="sd-order-success-section-title">
+              <Package2 size={16} strokeWidth={2.3} />
+              Order Summary
+            </div>
+            <div className="sd-order-success-lines">
+              {order.lines.map((line, index) => (
+                <div key={`${line.name}-${index}`} className="sd-order-success-line">
+                  <div>
+                    <strong>{line.name}</strong>
+                    {line.date && <span>{formatOrderSuccessDate(line.date)}</span>}
+                  </div>
+                  <em>x{line.qty}</em>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="sd-order-success-details">
+            <div>
+              <span>Method</span>
+              <strong>{methodLabel}</strong>
+            </div>
+            <div>
+              <span>{isDelivery ? 'Delivery' : 'Pickup'}</span>
+              <strong>{methodDetail}</strong>
+            </div>
+            {order.phoneNumber && (
+              <div>
+                <span>Phone</span>
+                <strong>{order.phoneNumber}</strong>
+              </div>
+            )}
+            {isDelivery && (
+              <div>
+                <span>Delivery Fee</span>
+                <strong>{order.deliveryFeeLabel || 'Calculated at checkout'}</strong>
+              </div>
+            )}
+          </div>
+
+          <div className="sd-order-success-next">
+            <Bell size={16} strokeWidth={2.2} />
+            <span>Cafe Lush will review your order. You will receive a notification when it is confirmed.</span>
+          </div>
+        </div>
+
+        <div className="sd-order-success-actions">
+          <button type="button" className="sd-btn-primary" onClick={onViewHistory}>
+            <History size={16} strokeWidth={2.3} />
+            View Order History
+          </button>
+          <button type="button" className="sd-btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// â”€â”€ Panel 1 - Meal Packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, refetchWeeklyPlan }) {
   const [form, setForm] = useState({
     meal_type: '',
     preference: '',
@@ -533,19 +1167,54 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   const [error, setError] = useState('')
   const [showMealMenu, setShowMealMenu] = useState(false)
   const [showDelivery, setShowDelivery] = useState(false)
+  const [showTakeaway, setShowTakeaway] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
   const [pendingPayload, setPendingPayload] = useState(null)
+  const [openingMealMenu, setOpeningMealMenu] = useState(false)
 
   const selectedType = mealTypes.find((t) => t.id === Number(form.meal_type))
   const cutoffDate = getCutoffDate(selectedType?.name, form.order_date)
   const { timeLeft, isPast } = useCountdown(cutoffDate)
 
-  const today = new Date().toISOString().split('T')[0]
-  const tomorrow = new Date(new Date().getTime() + 86400000).toISOString().split('T')[0]
+  const todayDate = new Date()
+  const today = toInputDate(todayDate)
+  const tomorrow = toInputDate(addDays(todayDate, 1))
+  const maxDate = toInputDate(addDays(todayDate, 3))
   const isPastNoon = new Date().getHours() >= 12
   const minDate = (selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon) ? tomorrow : today
+  const cardDate = form.order_date || today
+  const cardDateObj = new Date(`${cardDate}T00:00:00`)
+  const cardDayJs = Number.isNaN(cardDateObj.getTime()) ? new Date().getDay() : cardDateObj.getDay()
+  const cardDayKey = cardDayJs === 0 ? 6 : cardDayJs - 1
 
   const canPickDate = form.meal_type && form.preference
+
+  const getPlanPrice = (mealTime, mealCategory) => {
+    const normalizedMeal = mealTime?.toLowerCase()
+    if (!normalizedMeal) return null
+    const dayKey = normalizedMeal === 'lunch' && (cardDayKey === 5 || cardDayKey === 6)
+      ? 5
+      : cardDayKey
+    const slot = weeklyPlan?.[`${dayKey}_${normalizedMeal}_${mealCategory}`]
+    if (slot?.price === null || slot?.price === undefined || slot?.price === '') return null
+    const priceNum = Number(slot.price)
+    return Number.isFinite(priceNum) ? priceNum.toFixed(2) : null
+  }
+
+  const getCardPriceLabel = (mealTypeName) => {
+    const mealTime = mealTypeName?.toLowerCase()
+    const vegPrice = getPlanPrice(mealTime, 'veg')
+    const nonVegPrice = getPlanPrice(mealTime, 'nonveg')
+
+    if (vegPrice && nonVegPrice) {
+      return vegPrice === nonVegPrice
+        ? `LKR ${vegPrice}`
+        : `Veg LKR ${vegPrice} | Non-Veg LKR ${nonVegPrice}`
+    }
+    if (vegPrice) return `Veg LKR ${vegPrice}`
+    if (nonVegPrice) return `Non-Veg LKR ${nonVegPrice}`
+    return 'LKR price updating...'
+  }
 
   const handleOrder = async (e) => {
     e.preventDefault()
@@ -561,25 +1230,45 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
       )
       return
     }
+    if (form.order_date < minDate || form.order_date > maxDate) {
+      setError('Meal packages can only be ordered from today up to 3 days ahead.')
+      return
+    }
     if (selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon && form.order_date === today) {
-      setError('It is past 12:00 PM — dinner can only be ordered for tomorrow or later.')
+      setError('It is past 12:00 PM - dinner can only be ordered for tomorrow or later.')
       return
     }
     if (form.delivery_type === 'delivery') {
       setShowDelivery(true)
       return
     }
-    buildPayloadAndPrompt(form.quantity, '', '')
+    setShowTakeaway(true)
   }
 
-  const buildPayloadAndPrompt = (quantity, delivery_address, phone_number) => {
+  const buildPayloadAndPrompt = ({
+    quantity,
+    detailsText = '',
+    phoneNumber = '',
+    addressLine1 = '',
+    addressLine2 = '',
+    cityArea = '',
+    locationSource = 'address',
+    deliveryLatitude = null,
+    deliveryLongitude = null,
+  }) => {
     const payload = {
       meal_type: Number(form.meal_type),
       order_date: form.order_date,
       delivery_type: form.delivery_type,
       quantity,
-      delivery_address,
-      phone_number,
+      delivery_address: detailsText,
+      address_line_1: addressLine1,
+      address_line_2: addressLine2,
+      city_area: cityArea,
+      location_source: locationSource,
+      delivery_latitude: deliveryLatitude,
+      delivery_longitude: deliveryLongitude,
+      phone_number: phoneNumber,
       order_type: 'package',
       preference: form.preference,
     }
@@ -587,19 +1276,61 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
     setShowPrompt(true)
   }
 
-  const handlePromptNo = () => {
+  const handlePromptPlaceOnly = () => {
     setShowPrompt(false)
     onPackageReady(pendingPayload, false)
     setForm({ meal_type: '', preference: '', order_date: '', delivery_type: 'takeaway', quantity: 1 })
     setPendingPayload(null)
   }
 
-  const handlePromptYes = () => {
+  const handlePromptAddItems = () => {
     setShowPrompt(false)
     onPackageReady(pendingPayload, true)
     setForm({ meal_type: '', preference: '', order_date: '', delivery_type: 'takeaway', quantity: 1 })
     setPendingPayload(null)
   }
+
+  const handlePromptCancel = () => {
+    setShowPrompt(false)
+    setPendingPayload(null)
+  }
+
+  const handleOpenMealMenu = async () => {
+    setOpeningMealMenu(true)
+    try {
+      await refetchWeeklyPlan?.()
+    } catch {
+      // Keep the last loaded plan if refresh fails.
+    } finally {
+      setOpeningMealMenu(false)
+      setShowMealMenu(true)
+    }
+  }
+
+  const receiveOptions = [
+    {
+      value: 'takeaway',
+      label: 'Takeaway',
+      sub: 'Pick up your meal from Cafe Lush.',
+      hint: getPackageReadyText(selectedType?.name),
+      badge: 'Fixed time',
+      icon: Package2,
+    },
+    {
+      value: 'delivery',
+      label: 'Delivery',
+      sub: 'We deliver your meal package to your address.',
+      hint: getPackageReadyText(selectedType?.name),
+      badge: 'Free for packages',
+      icon: Truck,
+    },
+  ]
+
+  const selectedReceiveOption = receiveOptions.find((option) => option.value === form.delivery_type)
+  const submitLabel = form.delivery_type === 'delivery'
+    ? 'Continue to Delivery Address'
+    : 'Continue to Pickup Details'
+  const selectedReadyText = getPackageReadyText(selectedType?.name)
 
   return (
     <div className="sd-panel">
@@ -611,9 +1342,9 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
           <h2 className="sd-panel-title">Meal Packages</h2>
           <p className="sd-panel-subtitle">Select a package and schedule your meal</p>
         </div>
-        <button className="sd-btn-see-meal" onClick={() => setShowMealMenu(true)}>
+        <button type="button" className="sd-btn-see-meal" onClick={handleOpenMealMenu} disabled={openingMealMenu}>
           <UtensilsCrossed size={16} strokeWidth={2.2} />
-          <span>See Today's Meals</span>
+          <span>{openingMealMenu ? 'Refreshing meals...' : "See Today's Meals"}</span>
         </button>
       </div>
 
@@ -621,6 +1352,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
         <div className="sd-pkg-grid">
           {mealTypes.map((t) => {
             const isBreakfast = t.name.toLowerCase() === 'breakfast'
+            const priceLabel = getCardPriceLabel(t.name)
             return (
               <div key={t.id} className="sd-pkg-card">
                 <div className="sd-pkg-card-top">
@@ -645,7 +1377,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                 <div className="sd-pkg-tags">
                   <span className="sd-pkg-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <Package2 size={14} strokeWidth={2.2} />
-                    Takeaway ~30 min
+                    {getPackageReadyText(t.name)}
                   </span>
                   <span className="sd-pkg-tag delivery" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <Truck size={14} strokeWidth={2.2} />
@@ -664,7 +1396,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                 <div className="sd-pkg-card-footer">
                   <span className="sd-pkg-footer-name">{t.name} Package</span>
                   <span className="sd-pkg-footer-price">
-                    Rs. {t.price ? Number(t.price).toFixed(2) : '—'}
+                    {priceLabel}
                   </span>
                 </div>
               </div>
@@ -690,7 +1422,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                 setError('')
               }}
             >
-              <option value="">Select meal type…</option>
+              <option value="">Select meal type...</option>
               {mealTypes.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
@@ -708,7 +1440,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                 setError('')
               }}
             >
-              <option value="">Select preference…</option>
+              <option value="">Select preference...</option>
               <option value="veg">Veg</option>
               <option value="non-veg">Non-Veg</option>
             </select>
@@ -720,48 +1452,78 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
               className="sd-input"
               type="date"
               min={minDate}
+              max={maxDate}
               value={form.order_date}
               required
               disabled={!canPickDate}
               title={!canPickDate ? 'Select meal type and preference first' : ''}
               style={!canPickDate ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
-              onChange={(e) => setForm({ ...form, order_date: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, order_date: e.target.value })
+                setError('')
+              }}
             />
             {!canPickDate && (
               <p className="sd-input-hint">Select meal type &amp; preference first</p>
             )}
+            {canPickDate && (
+              <p className="sd-input-hint">Meal packages can be scheduled up to 3 days ahead.</p>
+            )}
             {canPickDate && selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon && (
-              <p className="sd-input-hint warning">Past 12:00 PM — earliest dinner order is tomorrow.</p>
+              <p className="sd-input-hint warning">Past 12:00 PM - earliest dinner order is tomorrow.</p>
             )}
           </div>
         </div>
 
-        <label className="sd-field-label">Order Type</label>
-        <div className="sd-ot-grid">
-          {[
-            { value: 'takeaway', label: 'Takeaway', sub: 'Pick up in ~30 min', icon: Package2 },
-            { value: 'delivery', label: 'Delivery', sub: 'Deliver to address', icon: Truck },
-          ].map(({ value, label, sub, icon }) => {
+        <div className="sd-package-method-header">
+          <div>
+            <label className="sd-field-label">How would you like to receive your meal?</label>
+            <p className="sd-package-method-subtitle">Choose one option. We will ask for the needed details in the next step.</p>
+          </div>
+          <span className="sd-package-method-selected">
+            Selected: {selectedReceiveOption?.label || 'Takeaway'}
+          </span>
+        </div>
+
+        <div className="sd-ot-grid sd-package-method-grid">
+          {receiveOptions.map(({ value, label, sub, hint, badge, icon }) => {
             const OtIcon = icon
+            const selected = form.delivery_type === value
             return (
-            <button
-              key={value}
-              type="button"
-              className={`sd-ot-card${form.delivery_type === value ? ' selected' : ''}`}
-              onClick={() => setForm({ ...form, delivery_type: value, quantity: 1 })}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                <OtIcon size={16} strokeWidth={2.2} />
-                <p className="sd-ot-name" style={{ margin: 0 }}>{label}</p>
-              </div>
-              <p className="sd-ot-sub">{sub}</p>
-            </button>
+              <button
+                key={value}
+                type="button"
+                className={`sd-ot-card sd-package-method-card${selected ? ' selected' : ''}`}
+                aria-pressed={selected}
+                onClick={() => setForm({ ...form, delivery_type: value, quantity: 1 })}
+              >
+                <span className="sd-package-method-check">
+                  {selected && <CheckCircle2 size={17} strokeWidth={2.4} />}
+                </span>
+                <span className="sd-package-method-top">
+                  <span className="sd-package-method-icon">
+                    <OtIcon size={20} strokeWidth={2.2} />
+                  </span>
+                  <span>
+                    <span className="sd-ot-name">{label}</span>
+                    <span className="sd-package-method-badge">{badge}</span>
+                  </span>
+                </span>
+                <span className="sd-ot-sub">{sub}</span>
+                <span className="sd-package-method-hint">{hint}</span>
+              </button>
             )
           })}
         </div>
 
+        <div className="sd-package-method-note">
+          {form.delivery_type === 'delivery'
+            ? `${selectedReadyText}. Please enter a clear address after continuing.`
+            : `${selectedReadyText}. Pickup is from Cafe Lush.`}
+        </div>
+
         <button type="submit" className="sd-btn-primary" disabled={isPast}>
-          Place Order
+          {submitLabel}
         </button>
       </form>
 
@@ -794,7 +1556,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                       Order by <strong>8:00 PM on {new Date(new Date(form.order_date + 'T00:00:00').setDate(new Date(form.order_date + 'T00:00:00').getDate() - 1)).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>
                     </span>
                     <span style={{ fontSize: '12px', display: 'block', marginTop: '2px', fontWeight: 400 }}>
-                      Breakfast for <strong>{new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> — order must be placed the evening before.
+                      Breakfast for <strong>{new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> - order must be placed the evening before.
                     </span>
                   </>
                 )
@@ -861,82 +1623,205 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
 
       {showDelivery && (
         <DeliveryModal
+          title="Delivery Address"
+          subtitle="Tell us where to deliver this meal package."
+          confirmLabel="Confirm Details"
+          allowCurrentLocation={false}
+          requireFeeEstimate={false}
+          hasPackage
+          deliveryIncludedText="Free delivery is included for meal package checkout."
           onCancel={() => setShowDelivery(false)}
-          onConfirm={({ quantity, delivery_address, phone_number }) => {
+          onConfirm={({ quantity, delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
             setShowDelivery(false)
-            buildPayloadAndPrompt(quantity, delivery_address, phone_number)
+            buildPayloadAndPrompt({
+              quantity,
+              detailsText: delivery_address,
+              phoneNumber: phone_number,
+              addressLine1: address_line_1,
+              addressLine2: address_line_2,
+              cityArea: city_area,
+              locationSource: location_source,
+              deliveryLatitude: delivery_latitude,
+              deliveryLongitude: delivery_longitude,
+            })
+          }}
+        />
+      )}
+
+      {showTakeaway && (
+        <TakeawayModal
+          onCancel={() => setShowTakeaway(false)}
+          onConfirm={({ quantity, phone_number, pickup_note }) => {
+            setShowTakeaway(false)
+            buildPayloadAndPrompt({
+              quantity,
+              detailsText: pickup_note,
+              phoneNumber: phone_number,
+            })
           }}
         />
       )}
 
       {showPrompt && (
-        <AddMenuItemsPrompt onYes={handlePromptYes} onNo={handlePromptNo} />
+        <AddMenuItemsPrompt
+          onAddItems={handlePromptAddItems}
+          onPlaceOnly={handlePromptPlaceOnly}
+          onCancel={handlePromptCancel}
+        />
       )}
     </div>
   )
 }
 
-// ── Scrolling item name ──────────────────────────────────────────────────────
-function ScrollingName({ name }) {
-  const spanRef = useRef(null)
-  const pRef = useRef(null)
+function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
+  const [qty, setQty] = useState(Math.max(1, initialQty || 1))
 
-  useEffect(() => {
-    const span = spanRef.current
-    const p = pRef.current
-    if (!span || !p) return
-    const overflow = span.scrollWidth - p.clientWidth
-    if (overflow > 0) {
-      span.classList.add('overflowing')
-      span.style.setProperty('--scroll-dist', `-${overflow + 8}px`)
-    } else {
-      span.classList.remove('overflowing')
-    }
-  }, [name])
+  const increaseQty = () => setQty((prev) => prev + 1)
+  const decreaseQty = () => setQty((prev) => Math.max(1, prev - 1))
 
-  return (
-    <p className="sd-item-name" ref={pRef}>
-      <span ref={spanRef}>{name}</span>
-    </p>
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onClose}>
+      <div className="sd-modal sd-item-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-modal-header">
+          <h3 className="sd-modal-title">Item Details</h3>
+          <p className="sd-modal-sub">Review the item details and choose the quantity before adding it to your cart.</p>
+        </div>
+
+        {item.image_url ? (
+          <img src={item.image_url} alt={item.name} className="sd-item-modal-img" />
+        ) : (
+          <div className="sd-item-modal-placeholder">
+            <UtensilsCrossed size={34} strokeWidth={2.1} color={T.textMuted} />
+          </div>
+        )}
+
+        <div className="sd-item-modal-body">
+          <div className="sd-item-modal-tags">
+            {item.item_id && <span className="sd-item-modal-tag">{item.item_id}</span>}
+            {item.category_name && <span className="sd-item-modal-tag">{item.category_name}</span>}
+          </div>
+
+          <h4 className="sd-item-modal-name">{item.name}</h4>
+          <p className="sd-item-modal-price">Rs. {Number(item.price).toFixed(2)}</p>
+
+          <div className="sd-item-modal-qty-wrap">
+            <span className="sd-field-label" style={{ marginBottom: 0 }}>Quantity</span>
+            <div className="sd-item-modal-qty">
+              <button type="button" className="sd-item-modal-qty-btn" onClick={decreaseQty} aria-label="Decrease quantity">
+                <Minus size={15} strokeWidth={2.3} />
+              </button>
+              <span className="sd-item-modal-qty-value">{qty}</span>
+              <button type="button" className="sd-item-modal-qty-btn" onClick={increaseQty} aria-label="Increase quantity">
+                <Plus size={15} strokeWidth={2.3} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="sd-modal-footer" style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
+          <button type="button" className="sd-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="sd-btn-primary" onClick={() => onAdd(item, qty)}>
+            <Plus size={16} strokeWidth={2.2} />
+            Add to Cart
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 
-// ── Panel 2 — Menu Items ──────────────────────────────────────────────────────
-function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent, showToast }) {
+// â”€â”€ Panel 2 - Menu Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const compareMenuItemsByCode = (a, b) => {
+  const parseCode = (item) => {
+    const code = (item.item_id || '').trim()
+    const match = code.match(/^(\d+)([A-Za-z].*)$/)
+    return {
+      code,
+      group: match ? match[2].toUpperCase() : code.toUpperCase(),
+      number: match ? Number(match[1]) : Number.MAX_SAFE_INTEGER,
+    }
+  }
+
+  const codeA = parseCode(a)
+  const codeB = parseCode(b)
+
+  if (codeA.code && !codeB.code) return -1
+  if (!codeA.code && codeB.code) return 1
+
+  const groupCompare = codeA.group.localeCompare(codeB.group, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+  if (groupCompare !== 0) return groupCompare
+
+  const numberCompare = codeA.number - codeB.number
+  if (numberCompare !== 0) return numberCompare
+
+  const codeCompare = codeA.code.localeCompare(codeB.code, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+  if (codeCompare !== 0) return codeCompare
+
+  return (a.name || '').localeCompare(b.name || '', undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+}
+
+function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent, showToast, onOrderSuccess, mealTypes = [] }) {
   const { data: rawItems = [], loading: loadingItems } = useApi(getStudentItems)
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [showOrderMethod, setShowOrderMethod] = useState(false)
+  const [showDelivery, setShowDelivery] = useState(false)
+  const [showTakeaway, setShowTakeaway] = useState(false)
+  const [selectedItem, setSelectedItem] = useState(null)
+  const categoryRefs = useRef({})
 
   const categories = useMemo(() => {
     const q = search.toLowerCase()
     const filtered = q
       ? rawItems.filter((i) =>
           i.name.toLowerCase().includes(q) ||
-          (i.item_id && i.item_id.toLowerCase().includes(q))
+          (i.item_id && i.item_id.toLowerCase().includes(q)) ||
+          (i.category_name && i.category_name.toLowerCase().includes(q))
         )
       : rawItems
 
     const map = {}
-    filtered.forEach((item) => {
+    filtered.slice().sort(compareMenuItemsByCode).forEach((item) => {
       const cat = item.category_name || 'Other'
       if (!map[cat]) map[cat] = []
       map[cat].push(item)
     })
-    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+    return Object.entries(map)
   }, [rawItems, search])
 
   const cartEntries = Object.values(cart).filter((e) => e.qty > 0)
   const cartTotal = cartEntries.reduce((sum, e) => sum + Number(e.item.price) * e.qty, 0)
   const cartCount = cartEntries.reduce((sum, e) => sum + e.qty, 0)
+  const menuOrderingOpen = isMenuItemOrderOpen()
 
-  const addToCart = (item) =>
+  const addToCart = (item, qtyToAdd = 1) =>
     setCart((prev) => ({
       ...prev,
-      [item.id]: { item, qty: (prev[item.id]?.qty ?? 0) + 1 },
+      [item.id]: { item, qty: (prev[item.id]?.qty ?? 0) + qtyToAdd },
     }))
+
+  const openItemDetails = (item) => {
+    setSelectedItem(item)
+  }
+
+  const closeItemDetails = () => {
+    setSelectedItem(null)
+  }
 
   const increaseQty = (item) =>
     setCart((prev) => ({
@@ -960,254 +1845,575 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
     }
   }
 
-  const handlePlaceOrder = async () => {
-    setError('')
-    if (cartEntries.length === 0) {
-      setError('Your cart is empty.')
+  const submitCartOrder = async ({
+    deliveryType,
+    phoneNumber = '',
+    detailsText = '',
+    addressLine1 = '',
+    addressLine2 = '',
+    cityArea = '',
+    locationSource = 'address',
+    deliveryLatitude = null,
+    deliveryLongitude = null,
+  }) => {
+    if (!isMenuItemOrderOpen()) {
+      setError(MENU_ITEM_ORDER_HOURS_MESSAGE)
+      showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
       return
     }
 
+    const checkoutMethod = pendingPackageOrder?.delivery_type || deliveryType
+    const checkoutPhone = pendingPackageOrder?.phone_number || phoneNumber
+    const checkoutDetails = pendingPackageOrder?.delivery_address || detailsText
+    const checkoutAddressLine1 = pendingPackageOrder?.address_line_1 || addressLine1
+    const checkoutAddressLine2 = pendingPackageOrder?.address_line_2 || addressLine2
+    const checkoutCityArea = pendingPackageOrder?.city_area || cityArea
+    const checkoutLocationSource = pendingPackageOrder?.location_source || locationSource
+    const checkoutLatitude = pendingPackageOrder?.delivery_latitude ?? deliveryLatitude
+    const checkoutLongitude = pendingPackageOrder?.delivery_longitude ?? deliveryLongitude
+    const inheritedOrderDate = pendingPackageOrder?.order_date || ''
+
     setSubmitting(true)
     try {
-      const itemOrders = cartEntries.map(({ item, qty }) => ({
-        delivery_type: 'takeaway',
-        quantity: qty,
-        order_type: 'item',
-        item: item.id,
-      }))
+      const itemOrders = cartEntries.map(({ item, qty }) => {
+        const itemOrder = {
+          delivery_type: checkoutMethod,
+          quantity: qty,
+          order_type: 'item',
+          item: item.id,
+          phone_number: checkoutPhone,
+          delivery_address: checkoutDetails,
+          address_line_1: checkoutAddressLine1,
+          address_line_2: checkoutAddressLine2,
+          city_area: checkoutCityArea,
+          location_source: checkoutLocationSource,
+          delivery_latitude: checkoutLatitude,
+          delivery_longitude: checkoutLongitude,
+        }
+        if (inheritedOrderDate) itemOrder.order_date = inheritedOrderDate
+        return itemOrder
+      })
 
       const allOrders = pendingPackageOrder ? [pendingPackageOrder, ...itemOrders] : itemOrders
-      await placeMealOrdersBatch(allOrders)
+      const { data: createdOrders = [] } = await placeMealOrdersBatch(allOrders)
+      const firstCreatedOrder = Array.isArray(createdOrders) ? createdOrders[0] : null
+      const deliveryFeeLabel = checkoutMethod === 'delivery'
+        ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, pendingPackageOrder ? 'Free' : 'Calculated at checkout')
+        : ''
+      const itemSummaryLines = cartEntries.map(({ item, qty }) => ({
+        name: item.name,
+        qty,
+      }))
+      const summaryLines = pendingPackageOrder
+        ? [getPackageSummaryLine(pendingPackageOrder, mealTypes), ...itemSummaryLines]
+        : itemSummaryLines
+      const packageReadyText = pendingPackageOrder
+        ? getPackageReadyTextFromPayload(pendingPackageOrder, mealTypes)
+        : ''
 
-      setSuccess(
-        pendingPackageOrder
-          ? `Meal package + ${cartCount} item${cartCount > 1 ? 's' : ''} ordered successfully!`
-          : `${cartCount} item${cartCount > 1 ? 's' : ''} ordered successfully!`
-      )
-
+      setSuccess('')
       setCart({})
-      onPackageOrderSent()
+      if (pendingPackageOrder) onPackageOrderSent()
       refetchOrders()
-      showToast(
-        pendingPackageOrder
-          ? `🎉 Meal package + ${cartCount} item${cartCount > 1 ? 's' : ''} ordered successfully!`
-          : `🎉 ${cartCount} item${cartCount > 1 ? 's' : ''} ordered successfully!`
-      )
+      onOrderSuccess?.({
+        title: 'Order Placed Successfully',
+        message: pendingPackageOrder
+          ? `Your meal package and cafe items have been sent together. ${packageReadyText}.`
+          : 'Your menu item order has been sent to Cafe Lush.',
+        method: checkoutMethod,
+        deliveryAddress: checkoutMethod === 'delivery' ? checkoutDetails : '',
+        pickupDetails: checkoutMethod === 'takeaway' ? checkoutDetails : '',
+        phoneNumber: checkoutPhone,
+        deliveryFeeLabel,
+        lines: summaryLines,
+      })
+      setShowOrderMethod(false)
+      setShowDelivery(false)
+      setShowTakeaway(false)
     } catch (err) {
       const d = err.response?.data
-      setError(d?.detail || d?.item?.[0] || JSON.stringify(d) || 'Failed to place order.')
-      showToast(d?.detail || 'Failed to place order.', 'error')
+      setError(d?.detail || d?.item?.[0] || d?.phone_number?.[0] || d?.delivery_address?.[0] || JSON.stringify(d) || 'Failed to place order.')
+      showToast(d?.detail || d?.phone_number?.[0] || d?.delivery_address?.[0] || 'Failed to place order.', 'error')
     } finally {
       setSubmitting(false)
     }
   }
 
+  const handlePlaceOrder = async () => {
+    setError('')
+    setSuccess('')
+    if (cartEntries.length === 0) {
+      setError('Your cart is empty.')
+      return
+    }
+    if (!isMenuItemOrderOpen()) {
+      setError(MENU_ITEM_ORDER_HOURS_MESSAGE)
+      showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
+      return
+    }
+
+    if (pendingPackageOrder) {
+      await submitCartOrder({
+        deliveryType: pendingPackageOrder.delivery_type,
+        phoneNumber: pendingPackageOrder.phone_number,
+        detailsText: pendingPackageOrder.delivery_address || '',
+      })
+      return
+    }
+
+    setShowOrderMethod(true)
+  }
+
+  const scrollToCategory = (catName) => {
+    categoryRefs.current[catName]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
+
   return (
-    <div className="sd-panel">
-      <div className="sd-panel-header">
-        <div>
-          <h2 className="sd-panel-title">Menu Items</h2>
-          <p className="sd-panel-subtitle">Browse and add items to your cart</p>
+    <>
+      <div className="sd-panel">
+        <div className="sd-panel-header">
+          <div>
+            <h2 className="sd-panel-title">Menu Items</h2>
+            <p className="sd-panel-subtitle">Browse and add items to your cart</p>
+            <p className={menuOrderingOpen ? 'sd-input-hint' : 'sd-input-hint warning'}>
+              {menuOrderingOpen
+                ? MENU_ITEM_ORDER_HOURS_MESSAGE
+                : 'Menu item ordering is closed now. Orders are available from 4:00 AM to 11:30 PM.'}
+            </p>
+          </div>
+
         </div>
 
-      </div>
+        {pendingPackageOrder && (
+          <div
+            style={{
+              background: '#f0fdf4',
+              border: '1.5px solid #86efac',
+              borderRadius: '10px',
+              padding: '12px 16px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              fontSize: '13px',
+              color: '#166534',
+            }}
+          >
+            <Package2 size={18} strokeWidth={2.2} />
+            <span>
+              <strong>Meal package order is ready.</strong> Add menu items below and place the combined order with the same {pendingPackageOrder.delivery_type} details you already confirmed.
+            </span>
+          </div>
+        )}
 
-      {pendingPackageOrder && (
-        <div
-          style={{
-            background: '#f0fdf4',
-            border: '1.5px solid #86efac',
-            borderRadius: '10px',
-            padding: '12px 16px',
-            marginBottom: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            fontSize: '13px',
-            color: '#166534',
-          }}
-        >
-          <Package2 size={18} strokeWidth={2.2} />
-          <span>
-            <strong>Meal package order is ready.</strong> Add menu items below and click Place Order to submit everything together.
-          </span>
-        </div>
-      )}
-
-      <div className="sd-search-wrap" style={{ position: 'relative' }}>
-        <Search
-          size={16}
-          strokeWidth={2.2}
-          style={{
-            position: 'absolute',
-            left: '12px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            color: '#9B8B7A',
-            pointerEvents: 'none',
-          }}
-        />
-        <input
-          className="sd-search"
-          type="text"
-          placeholder="Search by name or item ID…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ paddingLeft: '38px' }}
-        />
-      </div>
-
-      <div className="sd-menu-layout">
-        <div className="sd-items-col">
-          {loadingItems ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
-              <Spinner />
-            </div>
-          ) : categories.length === 0 ? (
-            <EmptyState message="No menu items available right now." />
-          ) : (
-            categories.map(([catName, items]) => (
-              <div key={catName} className="sd-cat-section">
-                <p className="sd-cat-label">{catName}</p>
-                <div className="sd-items-grid">
-                  {items.map((item) => {
-                    const inCart = !!cart[item.id]
-                    return (
-                      <div key={item.id} className={inCart ? 'sd-item-card in-cart' : 'sd-item-card'}>
-                        {item.image_url ? (
-                          <img src={item.image_url} alt={item.name} className="sd-item-img" />
-                        ) : (
-                          <div
-                            className="sd-item-placeholder"
-                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          >
-                            <UtensilsCrossed size={28} strokeWidth={2.2} color={T.textMuted} />
-                          </div>
-                        )}
-
-                        <div className="sd-item-body">
-                          {item.item_id && <p className="sd-item-id">{item.item_id}</p>}
-                          <ScrollingName name={item.name} />
-                          <p className="sd-item-price">Rs. {Number(item.price).toFixed(2)}</p>
-                        </div>
-
-                        <button
-                          className={inCart ? 'sd-add-btn in-cart' : 'sd-add-btn'}
-                          onClick={() => addToCart(item)}
-                        >
-                          {inCart ? (
-                            <>
-                              <CheckCircle2 size={16} strokeWidth={2.2} />
-                              <span>Added</span>
-                            </>
-                          ) : (
-                            <>
-                              <Plus size={16} strokeWidth={2.2} />
-                              <span>Add to Cart</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))
-          )}
+        <div className="sd-search-wrap" style={{ position: 'relative' }}>
+          <Search
+            size={16}
+            strokeWidth={2.2}
+            style={{
+              position: 'absolute',
+              left: '12px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#9B8B7A',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            className="sd-search"
+            type="text"
+            placeholder="Search by name or item ID..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ paddingLeft: '38px' }}
+          />
         </div>
 
-        <div className="sd-cart">
-          <div className="sd-cart-inner">
-            <div className="sd-cart-header">
-              <span className="sd-cart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <ShoppingCart size={18} strokeWidth={2.2} />
-                Your Cart
-              </span>
-              {cartCount > 0 && <span className="sd-cart-count">{cartCount}</span>}
-            </div>
-
-            <div className="sd-cart-items">
-              {cartEntries.length === 0 ? (
-                <div className="sd-cart-empty">
-                  <span className="sd-cart-empty-icon" style={{ display: 'flex', justifyContent: 'center' }}>
-                    <ShoppingCart size={24} strokeWidth={2.2} />
-                  </span>
-                  <p className="sd-cart-empty-text">No items added yet</p>
-                </div>
-              ) : (
-                cartEntries.map(({ item, qty }) => (
-                  <div key={item.id} className="sd-cart-row">
-                    <div className="sd-cart-row-info">
-                      <p className="sd-cart-row-name">{item.name}</p>
-                      <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
-                    </div>
-                    <div className="sd-cart-row-right">
-                      <div className="sd-cart-qty-controls">
-                        <button className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
-                          <Minus size={14} strokeWidth={2.4} />
-                        </button>
-                        <span className="sd-cart-qty-num">{qty}</span>
-                        <button className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
-                          <Plus size={14} strokeWidth={2.4} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {cartEntries.length > 0 && (
-              <div className="sd-cart-summary">
-                {cartEntries.map(({ item, qty }) => (
-                  <div key={item.id} className="sd-cart-summary-row">
-                    <span>{item.name} × {qty}</span>
-                    <span>Rs. {(Number(item.price) * qty).toFixed(2)}</span>
-                  </div>
-                ))}
-                <div className="sd-cart-summary-divider" />
-                <div className="sd-cart-summary-total">
-                  <span>Total</span>
-                  <span>Rs. {cartTotal.toFixed(2)}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="sd-cart-footer">
-              {error && <p className="sd-cart-feedback-error">{error}</p>}
-              {success && <p className="sd-cart-feedback-success">{success}</p>}
+        {!loadingItems && categories.length > 0 && (
+          <div className="sd-category-shortcuts" aria-label="Menu categories">
+            {categories.map(([catName, items]) => (
               <button
-                onClick={handlePlaceOrder}
-                disabled={submitting || cartEntries.length === 0}
-                className={`sd-cart-order-btn ${cartEntries.length > 0 ? 'ready' : 'empty'}`}
+                key={catName}
+                type="button"
+                className="sd-category-chip"
+                onClick={() => scrollToCategory(catName)}
               >
-                {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
-                {cartEntries.length === 0
-                  ? 'Add items to order'
-                  : pendingPackageOrder
-                    ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + pkg)`
-                    : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`}
+                <span>{catName}</span>
+                <span className="sd-category-chip-count">{items.length}</span>
               </button>
+            ))}
+          </div>
+        )}
+
+        <div className="sd-menu-layout">
+          <div className="sd-items-col">
+            {loadingItems ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+                <Spinner />
+              </div>
+            ) : categories.length === 0 ? (
+              <EmptyState message="No menu items available right now." />
+            ) : (
+              categories.map(([catName, items]) => (
+                <div
+                  key={catName}
+                  ref={(el) => {
+                    if (el) categoryRefs.current[catName] = el
+                  }}
+                  className="sd-cat-section"
+                >
+                  <p className="sd-cat-label">{catName}</p>
+                  <div className="sd-items-grid">
+                    {items.map((item) => {
+                      const inCart = !!cart[item.id]
+                      const inCartQty = cart[item.id]?.qty ?? 0
+                      return (
+                        <div
+                          key={item.id}
+                          className={inCart ? 'sd-item-card in-cart' : 'sd-item-card'}
+                          onClick={() => openItemDetails(item)}
+                        >
+                          {item.image_url ? (
+                            <img src={item.image_url} alt={item.name} className="sd-item-img" />
+                          ) : (
+                            <div
+                              className="sd-item-placeholder"
+                              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            >
+                              <UtensilsCrossed size={28} strokeWidth={2.2} color={T.textMuted} />
+                            </div>
+                          )}
+
+                          <div className="sd-item-body">
+                            {item.item_id && <p className="sd-item-id">{item.item_id}</p>}
+                            <p className="sd-item-name">{item.name}</p>
+                            <p className="sd-item-price">Rs. {Number(item.price).toFixed(2)}</p>
+                          </div>
+
+                          <button
+                            className={inCart ? 'sd-add-btn in-cart' : 'sd-add-btn'}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openItemDetails(item)
+                            }}
+                          >
+                            {inCart ? (
+                              <>
+                                <CheckCircle2 size={16} strokeWidth={2.2} />
+                                <span>In Cart ({inCartQty})</span>
+                              </>
+                            ) : (
+                              <>
+                                <Search size={16} strokeWidth={2.2} />
+                                <span>View Details</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="sd-cart">
+            <div className="sd-cart-inner">
+              <div className="sd-cart-header">
+                <span className="sd-cart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShoppingCart size={18} strokeWidth={2.2} />
+                  Your Cart
+                </span>
+                {cartCount > 0 && <span className="sd-cart-count">{cartCount}</span>}
+              </div>
+
+              <div className="sd-cart-items">
+                {cartEntries.length === 0 ? (
+                  <div className="sd-cart-empty">
+                    <span className="sd-cart-empty-icon" style={{ display: 'flex', justifyContent: 'center' }}>
+                      <ShoppingCart size={24} strokeWidth={2.2} />
+                    </span>
+                    <p className="sd-cart-empty-text">No items added yet</p>
+                  </div>
+                ) : (
+                  cartEntries.map(({ item, qty }) => (
+                    <div key={item.id} className="sd-cart-row">
+                      <div className="sd-cart-row-info">
+                        <p className="sd-cart-row-name">{item.name}</p>
+                        <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
+                      </div>
+                      <div className="sd-cart-row-right">
+                        <div className="sd-cart-qty-controls">
+                          <button className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
+                            <Minus size={14} strokeWidth={2.4} />
+                          </button>
+                          <span className="sd-cart-qty-num">{qty}</span>
+                          <button className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
+                            <Plus size={14} strokeWidth={2.4} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {cartEntries.length > 0 && (
+                <div className="sd-cart-summary">
+                  {cartEntries.map(({ item, qty }) => (
+                    <div key={item.id} className="sd-cart-summary-row">
+                      <span>{item.name} x {qty}</span>
+                      <span>Rs. {(Number(item.price) * qty).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <div className="sd-cart-summary-divider" />
+                  <div className="sd-cart-summary-total">
+                    <span>Total</span>
+                    <span>Rs. {cartTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="sd-cart-footer">
+                {error && <p className="sd-cart-feedback-error">{error}</p>}
+                {success && <p className="sd-cart-feedback-success">{success}</p>}
+                <button
+                  onClick={handlePlaceOrder}
+                  disabled={submitting || cartEntries.length === 0 || !menuOrderingOpen}
+                  className={`sd-cart-order-btn ${cartEntries.length > 0 ? 'ready' : 'empty'}`}
+                >
+                  {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
+                  {!menuOrderingOpen
+                    ? 'Orders open at 4:00 AM'
+                    : cartEntries.length === 0
+                    ? 'Add items to order'
+                    : pendingPackageOrder
+                      ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + pkg)`
+                      : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+
+      {showOrderMethod && (
+        <OrderMethodModal
+          onCancel={() => setShowOrderMethod(false)}
+          onSelect={(value) => {
+            setShowOrderMethod(false)
+            if (value === 'delivery') {
+              setShowDelivery(true)
+              return
+            }
+            setShowTakeaway(true)
+          }}
+        />
+      )}
+
+      {showDelivery && (
+        <DeliveryModal
+          showQuantity={false}
+          title="Delivery Details"
+          subtitle="Enter your delivery address and phone number. We will calculate the delivery charge automatically."
+          confirmLabel="Confirm Order"
+          allowCurrentLocation
+          requireFeeEstimate={true}
+          autoEstimateFee
+          onCancel={() => setShowDelivery(false)}
+          onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
+            setShowDelivery(false)
+            submitCartOrder({
+              deliveryType: 'delivery',
+              phoneNumber: phone_number,
+              detailsText: delivery_address,
+              addressLine1: address_line_1,
+              addressLine2: address_line_2,
+              cityArea: city_area,
+              locationSource: location_source,
+              deliveryLatitude: delivery_latitude,
+              deliveryLongitude: delivery_longitude,
+            })
+          }}
+        />
+      )}
+
+      {showTakeaway && (
+        <TakeawayModal
+          showQuantity={false}
+          title="Takeaway Details"
+          subtitle="Add your contact details before confirming these menu items for pickup."
+          noteLabel="Pickup Details (Optional)"
+          notePlaceholder="Example: Pickup person name - Nimal, contact - 0771234567"
+          confirmLabel="Confirm Order"
+          onCancel={() => setShowTakeaway(false)}
+          onConfirm={({ phone_number, pickup_note }) => {
+            setShowTakeaway(false)
+            submitCartOrder({
+              deliveryType: 'takeaway',
+              phoneNumber: phone_number,
+              detailsText: pickup_note,
+            })
+          }}
+        />
+      )}
+
+      {selectedItem && (
+        <ItemDetailsModal
+          item={selectedItem}
+          initialQty={1}
+          onClose={closeItemDetails}
+          onAdd={(item, qty) => {
+            addToCart(item, qty)
+            closeItemDetails()
+          }}
+        />
+      )}
+    </>
   )
 }
 
-// ── Panel 3 — Order History ───────────────────────────────────────────────────
-function OrderHistoryPanel({ orders, loading, onClear }) {
+// â”€â”€ Panel 3 - Order History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
   const [clearing, setClearing] = useState(false)
+  const [cancellingKey, setCancellingKey] = useState('')
+  const [selectedHistory, setSelectedHistory] = useState(null)
+
+  const sessionRows = useMemo(() => {
+    const statusPriority = ['pending', 'confirmed', 'cancelled']
+    const today = new Date().toISOString().slice(0, 10)
+    const sessionMap = new Map()
+
+    for (const order of orders) {
+      const key = order.session_id || `single-${order.id}`
+      if (!sessionMap.has(key)) sessionMap.set(key, [])
+      sessionMap.get(key).push(order)
+    }
+
+    return Array.from(sessionMap.values())
+      .map((sessionOrders) => {
+        const packageOrder = sessionOrders.find((o) => o.order_type === 'package') || null
+        const firstOrder = packageOrder || sessionOrders[0]
+        const itemOrders = sessionOrders.filter((o) => o.order_type === 'item')
+
+        const nameOf = (o) => o.package_label || (o.order_type === 'item' ? o.item_name : o.meal_type_name) || '-'
+        const summaryName = (() => {
+          if (sessionOrders.length === 1) return nameOf(firstOrder)
+          if (packageOrder) {
+            const extraItems = itemOrders.length
+            return extraItems > 0
+              ? `${nameOf(packageOrder)} + ${extraItems} menu item${extraItems > 1 ? 's' : ''}`
+              : nameOf(packageOrder)
+          }
+          return `${nameOf(firstOrder)} + ${sessionOrders.length - 1} more`
+        })()
+
+        const sessionDeliveryAddress =
+          sessionOrders.find((o) => (o.delivery_address || '').trim())?.delivery_address?.trim() || ''
+        const sessionPhoneNumber =
+          sessionOrders.find((o) => (o.phone_number || '').trim())?.phone_number?.trim() || ''
+        const sessionEmail =
+          sessionOrders.find((o) => (o.student_email || '').trim())?.student_email?.trim() || ''
+        const sessionStatusSet = new Set(sessionOrders.map((o) => o.status))
+        const sessionStatus =
+          statusPriority.find((s) => sessionStatusSet.has(s)) || firstOrder.status || 'pending'
+
+        const totalQty = sessionOrders.reduce((sum, o) => sum + (Number(o.quantity) || 0), 0)
+        const packageQty = packageOrder ? Number(packageOrder.quantity) || 0 : 0
+        const itemsQty = itemOrders.reduce((sum, o) => sum + (Number(o.quantity) || 0), 0)
+        const isCombined = Boolean(packageOrder && itemOrders.length > 0)
+        const cancelInfo = getPackageCancelInfo(packageOrder, isCombined)
+        const qtyLabel = isCombined
+          ? `${packageQty} pkg + ${itemsQty} item${itemsQty === 1 ? '' : 's'}`
+          : String(totalQty)
+
+        const showPickupTime =
+          sessionStatus === 'confirmed' &&
+          Boolean(firstOrder.pickup_time) &&
+          (
+            firstOrder.order_type === 'package' ||
+            (firstOrder.delivery_type === 'takeaway' && firstOrder.order_date === today)
+          )
+
+        const lines = sessionOrders
+          .slice()
+          .sort((a, b) => {
+            if (a.order_type === b.order_type) return a.id - b.id
+            return a.order_type === 'package' ? -1 : 1
+          })
+          .map((o) => ({
+            id: o.id,
+            kind: o.order_type,
+            name: nameOf(o),
+            qty: Number(o.quantity) || 0,
+            orderDate: o.order_date,
+            status: o.status,
+            preference: o.preference,
+          }))
+
+        return {
+          rowKey: firstOrder.session_id || `single-${firstOrder.id}`,
+          firstOrderId: firstOrder.id,
+          packageOrderId: packageOrder?.id || null,
+          orderReference: firstOrder.order_reference || '-',
+          summaryName,
+          orderDate: firstOrder.order_date,
+          kind: isCombined ? 'combined' : firstOrder.order_type,
+          deliveryType: firstOrder.delivery_type,
+          qtyLabel,
+          status: sessionStatus,
+          cancelInfo,
+          canCancel: Boolean(packageOrder) && sessionStatus === 'pending' && Boolean(cancelInfo?.canCancelNow),
+          placedAt: new Date(firstOrder.created_at).toLocaleString(),
+          pickupOrPlaced: showPickupTime
+            ? firstOrder.pickup_time
+            : new Date(firstOrder.created_at).toLocaleString(),
+          addressText: firstOrder.delivery_type === 'delivery' ? sessionDeliveryAddress : '',
+          pickupDetails: firstOrder.delivery_type === 'takeaway' ? sessionDeliveryAddress : '',
+          phoneNumber: sessionPhoneNumber,
+          studentEmail: sessionEmail,
+          lines,
+          createdAtTs: new Date(firstOrder.created_at).getTime(),
+        }
+      })
+      .sort((a, b) => b.createdAtTs - a.createdAtTs)
+  }, [orders])
 
   const handleClear = async () => {
     if (!window.confirm('Are you sure you want to delete all your order history? This cannot be undone.')) return
     setClearing(true)
     try {
       await clearOrderHistory()
+      setSelectedHistory(null)
       onClear()
     } finally {
       setClearing(false)
+    }
+  }
+
+  const handleCancelOrder = async (row, event) => {
+    event?.stopPropagation()
+    const message = row.cancelInfo?.combinedText
+      ? `${row.cancelInfo.ruleText} ${row.cancelInfo.combinedText}`
+      : row.cancelInfo?.ruleText || 'Cancel this order?'
+    if (!window.confirm(`${message}\n\nDo you want to cancel this order now?`)) return
+
+    setCancellingKey(row.rowKey)
+    try {
+      await cancelStudentOrder(row.packageOrderId || row.firstOrderId)
+      showToast?.('Order cancelled successfully.', 'success')
+      setSelectedHistory(null)
+      onClear()
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to cancel order.'
+      showToast?.(detail, 'error')
+    } finally {
+      setCancellingKey('')
     }
   }
 
@@ -1226,7 +2432,7 @@ function OrderHistoryPanel({ orders, loading, onClear }) {
             disabled={clearing}
           >
             <X size={14} strokeWidth={2.4} />
-            {clearing ? 'Clearing…' : 'Clear'}
+            {clearing ? 'Clearing...' : 'Clear'}
           </button>
         )}
       </div>
@@ -1242,38 +2448,70 @@ function OrderHistoryPanel({ orders, loading, onClear }) {
           <table className="sd-table">
             <thead>
               <tr>
-                {['#', 'Item / Package', 'Date', 'Kind', 'Type', 'Qty', 'Status', 'Pickup / Placed', 'Address'].map((h) => (
+                {['#', 'Item / Package', 'Date', 'Kind', 'Type', 'Qty', 'Status', 'Pickup / Placed', 'Address', 'Action'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {orders.map((o, i) => (
-                <tr key={o.id}>
+              {sessionRows.map((row, i) => (
+                <tr
+                  key={row.rowKey}
+                  onClick={() => setSelectedHistory(row)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setSelectedHistory(row)
+                    }
+                  }}
+                  tabIndex={0}
+                  style={{ cursor: 'pointer' }}
+                  title="Click to view full order details"
+                >
                   <td className="sd-table-num" data-label="#">{i + 1}</td>
                   <td className="sd-table-name" data-label="Item / Package">
-                    {o.order_type === 'item' ? o.item_name : o.meal_type_name}
+                    {row.summaryName}
+                    {row.cancelInfo && row.status === 'pending' && (
+                      <p className={row.canCancel ? 'sd-input-hint' : 'sd-input-hint warning'} style={{ marginTop: '4px' }}>
+                        {row.canCancel ? row.cancelInfo.ruleText : 'Cancellation time has passed for this meal package order.'}
+                      </p>
+                    )}
                   </td>
-                  <td data-label="Date">{o.order_date}</td>
+                  <td data-label="Date">{row.orderDate}</td>
                   <td data-label="Kind">
-                    <span className={o.order_type === 'item' ? 'sd-badge item' : 'sd-badge package'}>
-                      {o.order_type === 'item' ? 'Item' : 'Package'}
+                    <span className={row.kind === 'item' ? 'sd-badge item' : 'sd-badge package'}>
+                      {row.kind === 'combined' ? 'Combined' : row.kind === 'item' ? 'Item' : 'Package'}
                     </span>
                   </td>
                   <td data-label="Type">
-                    <span className={o.delivery_type === 'delivery' ? 'sd-badge delivery' : 'sd-badge takeaway'}>
-                      {o.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'}
+                    <span className={row.deliveryType === 'delivery' ? 'sd-badge delivery' : 'sd-badge takeaway'}>
+                      {row.deliveryType === 'delivery' ? 'Delivery' : 'Takeaway'}
                     </span>
                   </td>
-                  <td data-label="Qty">{o.quantity}</td>
-                  <td data-label="Status"><Badge status={o.status} /></td>
+                  <td data-label="Qty">{row.qtyLabel}</td>
+                  <td data-label="Status"><Badge status={row.status} /></td>
                   <td data-label="Pickup / Placed">
-                    {o.delivery_type === 'takeaway' && o.pickup_time
-                      ? <span className="sd-table-pickup">{o.pickup_time}</span>
-                      : new Date(o.created_at).toLocaleString()}
+                    {row.pickupOrPlaced}
                   </td>
                   <td data-label="Address" className="sd-table-address">
-                    {o.delivery_address || <span className="sd-table-dash">—</span>}
+                    {row.deliveryType === 'takeaway'
+                      ? <span className="sd-table-dash">-</span>
+                      : (row.addressText || <span className="sd-table-dash">-</span>)}
+                  </td>
+                  <td data-label="Action">
+                    {row.canCancel ? (
+                      <button
+                        type="button"
+                        className="sd-btn-secondary"
+                        style={{ minWidth: 'unset', padding: '7px 10px', fontSize: '12px', color: '#dc2626', borderColor: 'rgba(220,38,38,0.35)' }}
+                        disabled={cancellingKey === row.rowKey}
+                        onClick={(e) => handleCancelOrder(row, e)}
+                      >
+                        {cancellingKey === row.rowKey ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    ) : (
+                      <span className="sd-table-dash">-</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -1281,11 +2519,113 @@ function OrderHistoryPanel({ orders, loading, onClear }) {
           </table>
         </div>
       )}
+
+      {selectedHistory && createPortal(
+        <div className="sd-modal-overlay" onClick={() => setSelectedHistory(null)}>
+          <div className="sd-modal" style={{ maxWidth: '720px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="sd-modal-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <div>
+                <h3 className="sd-modal-title">Order Details</h3>
+                <p className="sd-modal-sub">Complete details for this order session</p>
+              </div>
+              <button
+                type="button"
+                className="sd-btn-secondary"
+                style={{ minWidth: 'unset', padding: '6px 10px' }}
+                onClick={() => setSelectedHistory(null)}
+              >
+                <X size={14} strokeWidth={2.4} />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px 18px', marginBottom: '16px' }}>
+              <div><strong>Order Ref:</strong> {selectedHistory.orderReference}</div>
+              <div><strong>Date:</strong> {selectedHistory.orderDate}</div>
+              <div><strong>Type:</strong> {selectedHistory.deliveryType === 'delivery' ? 'Delivery' : 'Takeaway'}</div>
+              <div><strong>Status:</strong> {selectedHistory.status}</div>
+              <div><strong>Qty:</strong> {selectedHistory.qtyLabel}</div>
+              <div><strong>Placed:</strong> {selectedHistory.placedAt}</div>
+              <div><strong>Pickup / Placed:</strong> {selectedHistory.pickupOrPlaced}</div>
+              <div><strong>Phone:</strong> {selectedHistory.phoneNumber || '-'}</div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <strong>Email:</strong> {selectedHistory.studentEmail || '-'}
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <strong>Delivery Address:</strong>{' '}
+                {selectedHistory.deliveryType === 'delivery'
+                  ? (selectedHistory.addressText || '-')
+                  : '-'}
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <strong>Pickup Details:</strong>{' '}
+                {selectedHistory.deliveryType === 'takeaway'
+                  ? (selectedHistory.pickupDetails || '-')
+                  : '-'}
+              </div>
+            </div>
+
+            {selectedHistory.cancelInfo && selectedHistory.status === 'pending' && (
+              <div
+                className={selectedHistory.canCancel ? 'sd-alert success' : 'sd-alert error'}
+                style={{ marginBottom: '14px' }}
+              >
+                <strong>Cancellation:</strong> {selectedHistory.cancelInfo.ruleText}
+                {selectedHistory.cancelInfo.cutoffText && ` ${selectedHistory.cancelInfo.cutoffText}`}
+                {selectedHistory.cancelInfo.combinedText && ` ${selectedHistory.cancelInfo.combinedText}`}
+                {!selectedHistory.canCancel && selectedHistory.status === 'pending' && ' Cancellation time has passed for this meal package order.'}
+              </div>
+            )}
+
+            <div className="sd-table-wrap" style={{ marginBottom: '8px' }}>
+              <table className="sd-table">
+                <thead>
+                  <tr>
+                    {['Line', 'Item / Package', 'Kind', 'Qty', 'Order Date', 'Status'].map((h) => (
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedHistory.lines.map((line, idx) => (
+                    <tr key={line.id}>
+                      <td data-label="Line">{idx + 1}</td>
+                      <td data-label="Item / Package">{line.name}</td>
+                      <td data-label="Kind">
+                        <span className={line.kind === 'item' ? 'sd-badge item' : 'sd-badge package'}>
+                          {line.kind === 'item' ? 'Item' : 'Package'}
+                        </span>
+                      </td>
+                      <td data-label="Qty">{line.qty}</td>
+                      <td data-label="Order Date">{line.orderDate}</td>
+                      <td data-label="Status"><Badge status={line.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {selectedHistory.canCancel && (
+              <div className="sd-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '14px' }}>
+                <button
+                  type="button"
+                  className="sd-btn-secondary"
+                  style={{ color: '#dc2626', borderColor: 'rgba(220,38,38,0.35)' }}
+                  disabled={cancellingKey === selectedHistory.rowKey}
+                  onClick={(e) => handleCancelOrder(selectedHistory, e)}
+                >
+                  {cancellingKey === selectedHistory.rowKey ? 'Cancelling...' : 'Cancel Order'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
 
-// ── Panel 4 — Food Analytics ─────────────────────────────────────────────────
+// â”€â”€ Panel 4 - Food Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const DAYS  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MEALS = ['breakfast', 'dinner', 'lunch']
 
@@ -1299,19 +2639,19 @@ function generateHabitTags(orders) {
   const dinners    = pkgs.filter((o) => o.meal_type_name?.toLowerCase() === 'dinner')
   const deliveries = orders.filter((o) => o.delivery_type === 'delivery')
 
-  if (vegPkgs.length > nonVegPkgs.length && vegPkgs.length > 2) tags.push({ label: '🥦 Veg Lover', color: '#15803d', bg: 'rgba(21,128,61,0.1)', border: 'rgba(21,128,61,0.25)' })
-  if (nonVegPkgs.length > vegPkgs.length && nonVegPkgs.length > 2) tags.push({ label: '🍗 Non-Veg Fan', color: '#b91c1c', bg: 'rgba(185,28,28,0.08)', border: 'rgba(185,28,28,0.2)' })
-  if (breakfasts.length > dinners.length && breakfasts.length > 2) tags.push({ label: '🌅 Early Riser', color: '#b45309', bg: 'rgba(180,83,9,0.08)', border: 'rgba(180,83,9,0.2)' })
-  if (dinners.length > breakfasts.length && dinners.length > 2) tags.push({ label: '🌙 Night Diner', color: '#4338ca', bg: 'rgba(67,56,202,0.08)', border: 'rgba(67,56,202,0.2)' })
-  if (deliveries.length > orders.length * 0.5 && deliveries.length > 2) tags.push({ label: '🚚 Delivery Regular', color: '#0369a1', bg: 'rgba(3,105,161,0.08)', border: 'rgba(3,105,161,0.2)' })
-  if (items.length > pkgs.length && items.length > 3) tags.push({ label: '🍽️ À la Carte Fan', color: '#7c3aed', bg: 'rgba(124,58,237,0.08)', border: 'rgba(124,58,237,0.2)' })
-  if (orders.length >= 10) tags.push({ label: '⭐ Regular Customer', color: '#c9a84c', bg: 'rgba(201,168,76,0.1)', border: 'rgba(201,168,76,0.3)' })
-  if (orders.length >= 20) tags.push({ label: '👑 Loyal Member', color: '#c9a84c', bg: 'rgba(201,168,76,0.15)', border: 'rgba(201,168,76,0.4)' })
+  if (vegPkgs.length > nonVegPkgs.length && vegPkgs.length > 2) tags.push({ label: 'Veg Lover', color: '#15803d', bg: 'rgba(21,128,61,0.1)', border: 'rgba(21,128,61,0.25)' })
+  if (nonVegPkgs.length > vegPkgs.length && nonVegPkgs.length > 2) tags.push({ label: 'Non-Veg Fan', color: '#b91c1c', bg: 'rgba(185,28,28,0.08)', border: 'rgba(185,28,28,0.2)' })
+  if (breakfasts.length > dinners.length && breakfasts.length > 2) tags.push({ label: 'Early Riser', color: '#b45309', bg: 'rgba(180,83,9,0.08)', border: 'rgba(180,83,9,0.2)' })
+  if (dinners.length > breakfasts.length && dinners.length > 2) tags.push({ label: 'Night Diner', color: '#4338ca', bg: 'rgba(67,56,202,0.08)', border: 'rgba(67,56,202,0.2)' })
+  if (deliveries.length > orders.length * 0.5 && deliveries.length > 2) tags.push({ label: 'Delivery Regular', color: '#0369a1', bg: 'rgba(3,105,161,0.08)', border: 'rgba(3,105,161,0.2)' })
+  if (items.length > pkgs.length && items.length > 3) tags.push({ label: 'A la Carte Fan', color: '#7c3aed', bg: 'rgba(124,58,237,0.08)', border: 'rgba(124,58,237,0.2)' })
+  if (orders.length >= 10) tags.push({ label: 'Regular Customer', color: '#c9a84c', bg: 'rgba(201,168,76,0.1)', border: 'rgba(201,168,76,0.3)' })
+  if (orders.length >= 20) tags.push({ label: 'Loyal Member', color: '#c9a84c', bg: 'rgba(201,168,76,0.15)', border: 'rgba(201,168,76,0.4)' })
 
   const nameFreq = {}
   items.forEach((o) => { if (o.item_name) nameFreq[o.item_name] = (nameFreq[o.item_name] || 0) + o.quantity })
   const topItem = Object.entries(nameFreq).sort((a, b) => b[1] - a[1])[0]
-  if (topItem && topItem[1] >= 3) tags.push({ label: `❤️ Loves ${topItem[0]}`, color: '#be185d', bg: 'rgba(190,24,93,0.08)', border: 'rgba(190,24,93,0.2)' })
+  if (topItem && topItem[1] >= 3) tags.push({ label: `Loves ${topItem[0]}`, color: '#be185d', bg: 'rgba(190,24,93,0.08)', border: 'rgba(190,24,93,0.2)' })
 
   return tags
 }
@@ -1329,7 +2669,7 @@ function SummaryCard({ label, value, CardIcon, small }) {
 function FoodAnalyticsPanel({ orders }) {
   const confirmed = orders.filter((o) => o.status === 'confirmed')
 
-  // ── Summary ──────────────────────────────────────────────────────────────
+  // â”€â”€ Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const totalOrders = confirmed.length
 
   // Most ordered item
@@ -1372,7 +2712,7 @@ function FoodAnalyticsPanel({ orders }) {
   const pkgTotal   = pkgEntries.reduce((s, [, v]) => s + v, 0)
   const PKG_COLORS = ['#c9a84c', '#c4956a', '#6b3a1f', '#3d2314', '#8b6347', '#d4a853']
 
-  // Heatmap: day × meal
+  // Heatmap: day x meal
   const heatmap = {}
   DAYS.forEach((d) => { heatmap[d] = {}; MEALS.forEach((m) => { heatmap[d][m] = 0 }) })
   confirmed.filter((o) => o.order_type === 'package').forEach((o) => {
@@ -1420,14 +2760,14 @@ function FoodAnalyticsPanel({ orders }) {
         <TrendingUp size={22} strokeWidth={2.2} color={T.caramel} />
       </div>
 
-      {/* ── Summary Cards ── */}
+      {/* â”€â”€ Summary Cards â”€â”€ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px', marginBottom: '28px' }}>
         <SummaryCard label="Total Orders"   value={totalOrders}          CardIcon={Package2} />
-        <SummaryCard label="Favourite Item" value={topItem?.[0] || '—'}  CardIcon={UtensilsCrossed} small />
+        <SummaryCard label="Favourite Item" value={topItem?.[0] || '-'}  CardIcon={UtensilsCrossed} small />
         <SummaryCard label="Orders / Day"   value={dailyAvg}             CardIcon={CalendarDays} />
       </div>
 
-      {/* ── Top Items Bar Chart ── */}
+      {/* â”€â”€ Top Items Bar Chart â”€â”€ */}
       {topItems.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Most Ordered</p>
@@ -1438,7 +2778,7 @@ function FoodAnalyticsPanel({ orders }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 600, color: T.espresso, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{name}</span>
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: T.caramel, flexShrink: 0 }}>{count}×</span>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: T.caramel, flexShrink: 0 }}>{count}x</span>
                   </div>
                   <div style={{ height: '8px', background: '#f0e8dc', borderRadius: '100px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${(count / maxItemVal) * 100}%`, background: i === 0 ? T.caramel : i === 1 ? T.latte : '#c4956a88', borderRadius: '100px', transition: 'width 0.6s ease' }} />
@@ -1450,7 +2790,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* ── Package Breakdown ── */}
+      {/* â”€â”€ Package Breakdown â”€â”€ */}
       {pkgEntries.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Package Breakdown</p>
@@ -1491,7 +2831,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* ── Monthly Spend ── */}
+      {/* â”€â”€ Monthly Spend â”€â”€ */}
       {monthEntries.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Monthly Spend</p>
@@ -1507,7 +2847,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* ── Heatmap ── */}
+      {/* â”€â”€ Heatmap â”€â”€ */}
       <div style={{ marginBottom: '28px' }}>
         <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Order Activity Heatmap</p>
         <div style={{ overflowX: 'auto' }}>
@@ -1542,7 +2882,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       </div>
 
-      {/* ── Habit Tags ── */}
+      {/* â”€â”€ Habit Tags â”€â”€ */}
       {habitTags.length > 0 && (
         <div>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px' }}>Your Eating Habits</p>
@@ -1559,7 +2899,7 @@ function FoodAnalyticsPanel({ orders }) {
   )
 }
 
-// ── Panel 5 — Suggestions ─────────────────────────────────────────────────────
+// â”€â”€ Panel 5 - Suggestions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function SuggestionsPanel({ showToast }) {
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -1573,7 +2913,7 @@ function SuggestionsPanel({ showToast }) {
       await submitSuggestion({ message: message.trim() })
       setMessage('')
       setSent(true)
-      showToast('✅ Your suggestion has been sent!')
+      showToast('Your suggestion has been sent!')
       setTimeout(() => setSent(false), 4000)
     } catch {
       showToast('Failed to send suggestion. Please try again.', 'error')
@@ -1605,7 +2945,7 @@ function SuggestionsPanel({ showToast }) {
           <textarea
             className="sd-input"
             rows={5}
-            placeholder="Write your suggestion, feedback, or idea here…"
+            placeholder="Write your suggestion, feedback, or idea here..."
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             required
@@ -1619,14 +2959,14 @@ function SuggestionsPanel({ showToast }) {
           style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
           {submitting ? <Spinner size="sm" /> : <MessageSquare size={16} strokeWidth={2.2} />}
-          {submitting ? 'Sending…' : 'Send Suggestion'}
+          {submitting ? 'Sending...' : 'Send Suggestion'}
         </button>
       </form>
     </div>
   )
 }
 
-// ── Profile Modal ────────────────────────────────────────────────────────────
+// â”€â”€ Profile Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function ProfileModal({ user, onClose, onSaved }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
@@ -1637,20 +2977,57 @@ function ProfileModal({ user, onClose, onSaved }) {
   const [saving, setSaving]   = useState(false)
   const [error,  setError]    = useState('')
 
+  const getProfileErrorMessage = (err) => {
+    const data = err?.response?.data
+    if (!data) return 'Failed to save changes.'
+    if (typeof data === 'string' && data.trim()) return data
+    if (typeof data.detail === 'string' && data.detail.trim()) return data.detail
+
+    const priority = ['full_name', 'email', 'contact', 'non_field_errors']
+    for (const key of priority) {
+      const value = data?.[key]
+      if (Array.isArray(value) && value.length) return String(value[0])
+      if (typeof value === 'string' && value.trim()) return value
+    }
+
+    for (const value of Object.values(data)) {
+      if (Array.isArray(value) && value.length) return String(value[0])
+      if (typeof value === 'string' && value.trim()) return value
+    }
+    return 'Failed to save changes.'
+  }
+
   const handleSave = async (e) => {
     e.preventDefault()
+    const fullName = form.full_name.trim()
+    const email = form.email.trim()
+    const contact = form.contact.trim()
+
+    if (!fullName) {
+      setError('Full name is required.')
+      return
+    }
+    if (email && !isValidEmail(email)) {
+      setError('Enter a valid email address (example: user@example.com).')
+      return
+    }
+    if (contact && !isValidSriLankanMobile(contact)) {
+      setError('Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).')
+      return
+    }
+
     setSaving(true)
     setError('')
     try {
       const { data } = await updateProfile({
-        email:     form.email.trim(),
-        full_name: form.full_name.trim(),
-        contact:   form.contact.trim(),
+        email,
+        full_name: fullName,
+        contact: contact ? normalizePhone(contact) : '',
       })
       onSaved(data)
       setEditing(false)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save changes.')
+      setError(getProfileErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -1658,11 +3035,11 @@ function ProfileModal({ user, onClose, onSaved }) {
 
   const rows = [
     { label: 'Username',     value: user?.username },
-    { label: 'Full Name',    value: user?.full_name  || '—', field: 'full_name' },
-    { label: 'Email',        value: user?.email      || '—', field: 'email',    type: 'email' },
-    { label: 'Contact',      value: user?.contact    || '—', field: 'contact',  type: 'tel' },
+    { label: 'Full Name',    value: user?.full_name  || '-', field: 'full_name' },
+    { label: 'Email',        value: user?.email      || '-', field: 'email',    type: 'email' },
+    { label: 'Contact',      value: user?.contact    || '-', field: 'contact',  type: 'tel' },
     { label: 'Role',         value: user?.role?.name || 'Student' },
-    { label: 'Member Since', value: user?.created_at ? new Date(user.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '—' },
+    { label: 'Member Since', value: user?.created_at ? new Date(user.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '-' },
   ]
 
   return createPortal(
@@ -1696,7 +3073,7 @@ function ProfileModal({ user, onClose, onSaved }) {
                     type={type}
                     value={form[field]}
                     onChange={(e) => setForm({ ...form, [field]: e.target.value })}
-                    placeholder={`Enter ${label.toLowerCase()}…`}
+                    placeholder={`Enter ${label.toLowerCase()}...`}
                   />
                 </div>
               ))}
@@ -1706,7 +3083,7 @@ function ProfileModal({ user, onClose, onSaved }) {
               <button type="button" className="sd-btn-secondary" onClick={() => { setEditing(false); setError('') }}>Cancel</button>
               <button type="submit" className="sd-btn-primary" disabled={saving} style={{ flex: 1, justifyContent: 'center' }}>
                 {saving ? <Spinner size="sm" /> : <CheckCircle2 size={16} strokeWidth={2.2} />}
-                {saving ? 'Saving…' : 'Save Changes'}
+                {saving ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </form>
@@ -1736,14 +3113,14 @@ function ProfileModal({ user, onClose, onSaved }) {
   )
 }
 
-// ── Panel 6 — About Cafe Lush ─────────────────────────────────────────────────
+// â”€â”€ Panel 6 - About Cafe Lush â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function AboutCafeLushPanel() {
   return (
     <div className="sd-panel">
       <div className="sd-panel-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <h2 className="sd-panel-title">About Cafe Lush</h2>
-          <p className="sd-panel-subtitle">Fine Dining &amp; Events — Jaffna, Sri Lanka</p>
+          <p className="sd-panel-subtitle">Fine Dining &amp; Events - Jaffna, Sri Lanka</p>
         </div>
         <Coffee size={22} strokeWidth={2.2} color={T.caramel} />
       </div>
@@ -1806,7 +3183,7 @@ function AboutCafeLushPanel() {
   )
 }
 
-// ── Tab config ────────────────────────────────────────────────────────────────
+// â”€â”€ Tab config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const TABS = [
   { key: 'packages',    label: 'Meal Packages',    Icon: Package2   },
   { key: 'menu',        label: 'Menu Items',        Icon: BookOpen   },
@@ -1816,7 +3193,79 @@ const TABS = [
   { key: 'about',       label: 'About Cafe Lush',   Icon: Coffee     },
 ]
 
-// ── Main Dashboard ────────────────────────────────────────────────────────────
+function formatNotificationTime(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const now = new Date()
+  const sameDay = date.toDateString() === now.toDateString()
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+
+  const time = date.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+
+  if (sameDay) return `Today, ${time}`
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function formatNotificationCard(notification) {
+  const message = notification.message || ''
+  const lower = message.toLowerCase()
+  const confirmedMatch = message.match(/^Your\s+(.+?)\s+order(?:\s+for\s+([0-9-]+))?\s+has been confirmed!?/i)
+
+  if (confirmedMatch) {
+    const itemName = confirmedMatch[1]?.trim() || 'Your order'
+    const orderDate = confirmedMatch[2]?.trim()
+    const method = lower.includes('delivery')
+      ? 'Delivery to your address'
+      : lower.includes('pickup') || lower.includes('takeaway')
+        ? 'Ready for pickup'
+        : 'Order confirmed'
+
+    return {
+      title: 'Order Confirmed',
+      detail: orderDate ? `${itemName} - ${orderDate}` : itemName,
+      meta: method,
+      tone: 'success',
+    }
+  }
+
+  if (lower.includes('cancel')) {
+    return {
+      title: 'Order Cancelled',
+      detail: message,
+      meta: 'Please contact the cafe if you need help.',
+      tone: 'danger',
+    }
+  }
+
+  if (lower.includes('ready')) {
+    return {
+      title: 'Order Ready',
+      detail: message,
+      meta: 'Ready for pickup',
+      tone: 'ready',
+    }
+  }
+
+  return {
+    title: 'Order Update',
+    detail: message,
+    meta: 'Latest update from Cafe Lush',
+    tone: 'info',
+  }
+}
+
+// â”€â”€ Main Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function StudentDashboard() {
   const { user, setUser, logout } = useAuth()
   const [activeTab, setActiveTab] = useState('packages')
@@ -1854,24 +3303,35 @@ export default function StudentDashboard() {
 
   const { data: mealTypes = [], loading: loadingTypes } = useApi(getMealTypes)
   const { data: orders = [], loading: loadingOrders, refetch: refetchOrders } = useApi(getMealOrders)
+  const orderSessionCount = useMemo(() => {
+    const keys = new Set()
+    orders.forEach((o) => keys.add(o.session_id || `single-${o.id}`))
+    return keys.size
+  }, [orders])
 
   const [weeklyPlan, setWeeklyPlan] = useState({})
   const [pendingPackageOrder, setPendingPackageOrder] = useState(null)
+  const [orderSuccess, setOrderSuccess] = useState(null)
   const [toast, setToast] = useState(null)
 
   const showToast = (message, type = 'success') => setToast({ message, type })
 
-  useEffect(() => {
-    getWeeklyMealPlan()
-      .then(({ data }) => {
-        const obj = {}
-        data.forEach((s) => {
-          obj[`${s.day_of_week}_${s.meal_time}_${s.meal_category}`] = s
-        })
-        setWeeklyPlan(obj)
+  const fetchWeeklyPlan = useCallback(async () => {
+    try {
+      const { data } = await getWeeklyMealPlan()
+      const obj = {}
+      data.forEach((s) => {
+        obj[`${s.day_of_week}_${s.meal_time}_${s.meal_category}`] = s
       })
-      .catch(() => {})
+      setWeeklyPlan(obj)
+    } catch {
+      // ignore
+    }
   }, [])
+
+  useEffect(() => {
+    fetchWeeklyPlan()
+  }, [fetchWeeklyPlan])
 
   const handlePackageReady = async (payload, addMenuItems) => {
     if (addMenuItems) {
@@ -1879,9 +3339,22 @@ export default function StudentDashboard() {
       setActiveTab('menu')
     } else {
       try {
-        await placeMealOrdersBatch([payload])
+        const { data: createdOrders = [] } = await placeMealOrdersBatch([payload])
+        const firstCreatedOrder = Array.isArray(createdOrders) ? createdOrders[0] : null
+        const packageReadyText = getPackageReadyTextFromPayload(payload, mealTypes)
         refetchOrders()
-        showToast('🎉 Your order has been placed successfully!')
+        setOrderSuccess({
+          title: 'Order Placed Successfully',
+          message: `Your meal package order has been sent to Cafe Lush. ${packageReadyText}.`,
+          method: payload.delivery_type,
+          deliveryAddress: payload.delivery_type === 'delivery' ? payload.delivery_address : '',
+          pickupDetails: payload.delivery_type === 'takeaway' ? payload.delivery_address : '',
+          phoneNumber: payload.phone_number,
+          deliveryFeeLabel: payload.delivery_type === 'delivery'
+            ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, 'Free')
+            : '',
+          lines: [getPackageSummaryLine(payload, mealTypes)],
+        })
       } catch (err) {
         showToast(err.response?.data?.detail || 'Failed to place order.', 'error')
       }
@@ -1941,14 +3414,14 @@ export default function StudentDashboard() {
                   +pkg
                 </span>
               )}
-              {key === 'history' && orders.length > 0 && !pendingPackageOrder && (
+              {key === 'history' && orderSessionCount > 0 && !pendingPackageOrder && (
                 <span className="sd-nav-badge" style={{ marginLeft: 'auto' }}>
-                  {orders.length}
+                  {orderSessionCount}
                 </span>
               )}
-              {key === 'history' && orders.length > 0 && pendingPackageOrder && (
+              {key === 'history' && orderSessionCount > 0 && pendingPackageOrder && (
                 <span className="sd-nav-badge">
-                  {orders.length}
+                  {orderSessionCount}
                 </span>
               )}
             </button>
@@ -1964,7 +3437,7 @@ export default function StudentDashboard() {
         </div>
       </aside>
 
-      {/* ── Mobile bottom nav ── */}
+      {/* â”€â”€ Mobile bottom nav â”€â”€ */}
       <nav className="sd-bottom-nav">
         {TABS.map(({ key, label, Icon }) => {
           const NavIcon = Icon
@@ -2019,21 +3492,51 @@ export default function StudentDashboard() {
                   <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setShowNotifs(false)} />
                   <div className="sd-topbar-dropdown" style={{ right: 0, left: 'auto', minWidth: '300px' }}>
                     <div className="sd-notif-header">
-                      <span className="sd-notif-title">Notifications</span>
+                      <div>
+                        <span className="sd-notif-title">Notifications</span>
+                        <p className="sd-notif-sub">
+                          {unreadCount > 0
+                            ? `${unreadCount} new update${unreadCount === 1 ? '' : 's'}`
+                            : 'You are all caught up'}
+                        </p>
+                      </div>
                       <button onClick={() => setShowNotifs(false)} className="sd-notif-close">
                         <X size={16} strokeWidth={2.2} />
                       </button>
                     </div>
                     <div className="sd-notif-list">
                       {notifs.length === 0 ? (
-                        <p className="sd-notif-empty">No notifications yet.</p>
+                        <div className="sd-notif-empty">
+                          <Bell size={24} strokeWidth={2.1} />
+                          <strong>No notifications yet</strong>
+                          <span>Order updates will appear here.</span>
+                        </div>
                       ) : (
-                        notifs.map((n) => (
-                          <div key={n.id} className={n.is_read ? 'sd-notif-item' : 'sd-notif-item unread'}>
-                            <p className="sd-notif-msg">{n.message}</p>
-                            <p className="sd-notif-time">{new Date(n.created_at).toLocaleString()}</p>
-                          </div>
-                        ))
+                        notifs.map((n) => {
+                          const card = formatNotificationCard(n)
+                          return (
+                            <div key={n.id} className={n.is_read ? `sd-notif-item ${card.tone}` : `sd-notif-item ${card.tone} unread`}>
+                              <span className="sd-notif-icon">
+                                {card.tone === 'danger'
+                                  ? <X size={14} strokeWidth={2.4} />
+                                  : card.tone === 'ready'
+                                    ? <Package2 size={14} strokeWidth={2.4} />
+                                    : <CheckCircle2 size={14} strokeWidth={2.4} />}
+                              </span>
+                              <div className="sd-notif-content">
+                                <div className="sd-notif-topline">
+                                  <p className="sd-notif-msg">{card.title}</p>
+                                  {!n.is_read && <span className="sd-notif-new">New</span>}
+                                </div>
+                                <p className="sd-notif-detail">{card.detail}</p>
+                                <div className="sd-notif-meta">
+                                  <span>{card.meta}</span>
+                                  <span>{formatNotificationTime(n.created_at)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })
                       )}
                     </div>
                   </div>
@@ -2065,6 +3568,7 @@ export default function StudentDashboard() {
               loadingTypes={loadingTypes}
               onPackageReady={handlePackageReady}
               weeklyPlan={weeklyPlan}
+              refetchWeeklyPlan={fetchWeeklyPlan}
             />
           )}
 
@@ -2074,11 +3578,18 @@ export default function StudentDashboard() {
               pendingPackageOrder={pendingPackageOrder}
               onPackageOrderSent={() => setPendingPackageOrder(null)}
               showToast={showToast}
+              onOrderSuccess={setOrderSuccess}
+              mealTypes={mealTypes}
             />
           )}
 
           {activeTab === 'history' && (
-            <OrderHistoryPanel orders={orders} loading={loadingOrders} onClear={refetchOrders} />
+            <OrderHistoryPanel
+              orders={orders}
+              loading={loadingOrders}
+              onClear={refetchOrders}
+              showToast={showToast}
+            />
           )}
 
           {activeTab === 'analytics' && (
@@ -2102,6 +3613,19 @@ export default function StudentDashboard() {
           onClose={() => setToast(null)}
         />
       )}
+
+      {orderSuccess && (
+        <OrderSuccessModal
+          order={orderSuccess}
+          onClose={() => setOrderSuccess(null)}
+          onViewHistory={() => {
+            setOrderSuccess(null)
+            setActiveTab('history')
+          }}
+        />
+      )}
     </div>
   )
 }
+
+

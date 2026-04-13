@@ -2,10 +2,11 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     MealTypeViewSet, MealPackageViewSet, MealOrderView, MealOrderBatchView, MealOrderStatusView,
+    StudentOrderCancelView,
     NotificationView, PosItemsForPackageView, StudentItemsView,
     OnlineOrdersView, OnlineOrderDetailView, GenerateBillView, WalkInBillView,
     WalkInBillListView, BillDetailView, BillPrintView, BillPdfView, SendBillEmailView,
-    SuggestionView, ClearOrderHistoryView,
+    SuggestionView, ClearOrderHistoryView, DeliveryFeeEstimateView,
 )
 
 router = DefaultRouter()
@@ -17,6 +18,8 @@ urlpatterns = [
     path('orders/',                       MealOrderView.as_view()),
     path('orders/clear/',                 ClearOrderHistoryView.as_view()),
     path('orders/batch/',                 MealOrderBatchView.as_view()),
+    path('orders/delivery-fee/',          DeliveryFeeEstimateView.as_view()),
+    path('orders/<int:pk>/cancel/',       StudentOrderCancelView.as_view()),
     path('orders/<int:pk>/status/',       MealOrderStatusView.as_view()),
     path('notifications/',                NotificationView.as_view()),
     path('package-items/',                PosItemsForPackageView.as_view()),

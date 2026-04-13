@@ -25,6 +25,99 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
   )
 }
 
+function getToastItemLabel(order = {}) {
+  return order.package_label || order.item_name || order.meal_type_name || 'Order'
+}
+
+function formatToastTime(value) {
+  const stamp = value ? new Date(value) : new Date()
+  if (Number.isNaN(stamp.getTime())) return ''
+  return stamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+function buildOrderToast(source = {}) {
+  if (source.variant === 'aggregate') {
+    const count = Number(source.count || 0)
+    return {
+      id: source.id || `aggregate-${Date.now()}`,
+      kind: 'aggregate',
+      headline: `${count} more online order${count === 1 ? '' : 's'} waiting`,
+      message: 'Open Online Orders to review the latest pending sessions.',
+      time: formatToastTime(source.created_at),
+    }
+  }
+
+  const orders = Array.isArray(source.orders) && source.orders.length ? source.orders : [source]
+  const first = orders[0] || {}
+  const firstLabel = getToastItemLabel(first)
+  const firstQty = Number(first.quantity || 1)
+  const extraItems = Math.max(orders.length - 1, 0)
+  const itemSummary = extraItems > 0
+    ? `${firstLabel} x${firstQty} + ${extraItems} more item${extraItems > 1 ? 's' : ''}`
+    : `${firstLabel} x${firstQty}`
+
+  return {
+    id: source.id || `${source.session_id || first.id || 'order'}-${Date.now()}`,
+    kind: 'order',
+    studentName: source.student_name || first.student_name || 'Student',
+    orderReference: source.order_reference || first.order_reference || '',
+    deliveryType: (source.delivery_type || first.delivery_type || 'takeaway').toLowerCase(),
+    itemSummary,
+    time: formatToastTime(source.created_at || first.created_at),
+  }
+}
+
+function NewOrderToast({ toast, onOpen, onClose }) {
+  if (!toast) return null
+  const isAggregate = toast.kind === 'aggregate'
+  const deliveryLabel = toast.deliveryType === 'delivery' ? 'Delivery' : 'Takeaway'
+
+  return (
+    <div className={`cd-order-toast${isAggregate ? ' aggregate' : ''}`} role="status" aria-live="polite">
+      <div className="cd-order-toast-head">
+        <div className="cd-order-toast-title">{isAggregate ? 'New Online Orders' : 'New Online Order'}</div>
+        <button className="cd-order-toast-close" onClick={onClose} aria-label="Close notification">X</button>
+      </div>
+
+      {isAggregate ? (
+        <>
+          <div className="cd-order-toast-student">{toast.headline}</div>
+          <div className="cd-order-toast-body">{toast.message}</div>
+          {toast.time && <div className="cd-order-toast-time">Received at {toast.time}</div>}
+        </>
+      ) : (
+        <>
+          <div className="cd-order-toast-topline">
+            <div className="cd-order-toast-student">{toast.studentName}</div>
+            <span className={`cd-order-toast-badge ${toast.deliveryType === 'delivery' ? 'delivery' : 'takeaway'}`}>
+              {deliveryLabel}
+            </span>
+          </div>
+
+          <div className="cd-order-toast-details">
+            {!!toast.orderReference && toast.orderReference !== '-' && (
+              <div className="cd-order-toast-detail">
+                <span className="cd-order-toast-detail-label">Order Ref</span>
+                <span className="cd-order-toast-detail-value">{toast.orderReference}</span>
+              </div>
+            )}
+            <div className="cd-order-toast-detail">
+              <span className="cd-order-toast-detail-label">Items</span>
+              <span className="cd-order-toast-detail-value">{toast.itemSummary}</span>
+            </div>
+            <div className="cd-order-toast-detail">
+              <span className="cd-order-toast-detail-label">Received</span>
+              <span className="cd-order-toast-detail-value">{toast.time || '-'}</span>
+            </div>
+          </div>
+        </>
+      )}
+
+      <button className="cd-order-toast-open" onClick={onOpen}>Open Online Orders</button>
+    </div>
+  )
+}
+
 // ── Per-bill printable receipt (Bill History tab) ────────────────────────────
 function BillReceipt({ order, innerRef }) {
   return (
@@ -32,7 +125,8 @@ function BillReceipt({ order, innerRef }) {
       <div style={{ textAlign: 'center', marginBottom: '16px' }}>
         <div style={{ fontFamily: 'Playfair Display, serif', fontSize: '18px', fontWeight: 700, color: '#2C1A0E' }}>Cafe Lush</div>
         <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '4px' }}>Official Receipt</div>
-        {order.bill_id && <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px', fontWeight: 700 }}>{order.bill_id}</div>}
+        {order.order_reference && <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px', fontWeight: 700 }}>Order Ref: {order.order_reference}</div>}
+        {order.bill_id && <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px', fontWeight: 700 }}>Bill No (Internal): {order.bill_id}</div>}
         <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px' }}>{new Date(order.created_at).toLocaleString()}</div>
         {order.cashier_name && <div style={{ fontSize: '11px', color: '#4A7C45' }}>Cashier: {order.cashier_name}</div>}
       </div>
@@ -70,7 +164,10 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
   const totalSales = parseFloat(summary?.total_sales ?? orders.reduce((s, o) => s + parseFloat(o.total_amount), 0)).toFixed(2)
 
   const filteredOrders = search.trim()
-    ? orders.filter((o) => (o.bill_id || '').toLowerCase().includes(search.trim().toLowerCase()))
+    ? orders.filter((o) => {
+        const q = search.trim().toLowerCase()
+        return (o.bill_id || '').toLowerCase().includes(q) || (o.order_reference || '').toLowerCase().includes(q)
+      })
     : orders
 
   return (
@@ -104,7 +201,7 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
       <div style={{ padding: '0 0 12px 0' }}>
         <input
           type="text"
-          placeholder="Search by Bill ID (e.g. BILL-20250101-0001)…"
+          placeholder="Search by Order Ref or Bill No (Internal)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{
@@ -154,14 +251,19 @@ function HistoryRow({ order, billNum }) {
   const dateStr = createdAt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   const timeStr = createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
   const billLabel = order.bill_id || `Bill #${String(billNum).padStart(3, '0')}`
+  const orderRef = order.order_reference || '-'
+  const primaryLabel = orderRef !== '-' ? orderRef : billLabel
   const lineTotal = (line) => parseFloat(line.line_total ?? line.unit_price * line.quantity).toFixed(2)
 
   return (
     <div className={`cd-hbill-card${expanded ? ' expanded' : ''}`}>
       <button className="cd-hbill-header" onClick={() => setExpanded((v) => !v)}>
         <div className="cd-hbill-header-left">
-          <span className="cd-hbill-num">{billLabel}</span>
+          <span className="cd-hbill-num">{primaryLabel}</span>
           <span className="cd-hbill-time">{dateStr} — {timeStr}</span>
+          {orderRef !== '-' && (
+            <span style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>Bill No (Internal): {billLabel}</span>
+          )}
         </div>
         <div className="cd-hbill-header-right">
           <span className="cd-hbill-total">Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
@@ -208,15 +310,146 @@ function HistoryRow({ order, billNum }) {
 const HIDDEN_KEY = 'onlineOrders_hidden'
 const getHidden  = () => { try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')) } catch { return new Set() } }
 const saveHidden = (set) => localStorage.setItem(HIDDEN_KEY, JSON.stringify([...set]))
+const SEEN_ONLINE_KEY = 'cashier_seen_online_sessions'
+const loadSeenOnline = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(SEEN_ONLINE_KEY) || '[]')) } catch { return new Set() }
+}
+const saveSeenOnline = (set) => {
+  try { localStorage.setItem(SEEN_ONLINE_KEY, JSON.stringify([...set].slice(-800))) } catch { /* ignore */ }
+}
 
-function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
+const ONLINE_STATUS_GROUPS = [
+  { key: 'pending', label: 'Pending Orders' },
+  { key: 'confirmed', label: 'Confirmed Orders' },
+  { key: 'completed', label: 'Completed Orders' },
+  { key: 'cancelled', label: 'Rejected / Cancelled Orders' },
+]
+
+const ONLINE_TYPE_GROUPS = [
+  { key: 'combined', label: 'Meal Package + Menu Items' },
+  { key: 'package', label: 'Meal Package Orders' },
+  { key: 'item', label: 'Menu Item Orders' },
+]
+
+function getOnlineSessionType(session) {
+  const orders = session.orders || []
+  const hasPackage = orders.some((order) => order.order_type === 'package')
+  const hasItems = orders.some((order) => order.order_type === 'item')
+  if (hasPackage && hasItems) return 'combined'
+  if (hasPackage) return 'package'
+  return 'item'
+}
+
+function getOnlineSessionStatus(session) {
+  const statuses = new Set((session.orders || []).map((order) => order.status || session.status || 'pending'))
+  if (statuses.has('pending')) return 'pending'
+  if (statuses.has('confirmed')) return 'confirmed'
+  if (statuses.has('completed')) return 'completed'
+  if (statuses.has('cancelled')) return 'cancelled'
+  return session.status || 'pending'
+}
+
+function getOnlineOrderLabel(order) {
+  return order.package_label || (order.order_type === 'item' ? order.item_name : order.meal_type_name) || 'Order item'
+}
+
+function getPackageReadyLabel(session) {
+  const packageOrder = (session.orders || []).find((order) => order.order_type === 'package')
+  if (!packageOrder) return ''
+  const meal = (packageOrder.meal_type_name || '').toLowerCase()
+  if (meal === 'breakfast') return 'Breakfast package at 7:30 AM'
+  if (meal === 'dinner') return 'Dinner package at 7:00 PM'
+  return packageOrder.meal_type_name ? `${packageOrder.meal_type_name} package` : ''
+}
+
+function getSessionTotalQuantity(session) {
+  return (session.orders || []).reduce((sum, order) => sum + Number(order.quantity || 0), 0)
+}
+
+const PREP_GROUPS = [
+  { key: 'breakfast_veg', label: 'Breakfast Veg', ready: '7:30 AM' },
+  { key: 'breakfast_nonveg', label: 'Breakfast Non-Veg', ready: '7:30 AM' },
+  { key: 'dinner_veg', label: 'Dinner Veg', ready: '7:00 PM' },
+  { key: 'dinner_nonveg', label: 'Dinner Non-Veg', ready: '7:00 PM' },
+  { key: 'weekend_lunch', label: 'Weekend Lunch', ready: 'Lunch time' },
+]
+
+function toDateInputValue(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function isWeekendDate(value) {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return false
+  return date.getDay() === 0 || date.getDay() === 6
+}
+
+function getPackagePrepKey(order) {
+  const meal = (order.meal_type_name || '').toLowerCase()
+  const preference = (order.preference || '').toLowerCase()
+
+  if (meal === 'breakfast' && preference === 'veg') return 'breakfast_veg'
+  if (meal === 'breakfast' && preference === 'non-veg') return 'breakfast_nonveg'
+  if (meal === 'dinner' && preference === 'veg') return 'dinner_veg'
+  if (meal === 'dinner' && preference === 'non-veg') return 'dinner_nonveg'
+  if (meal === 'lunch' && isWeekendDate(order.order_date)) return 'weekend_lunch'
+  return ''
+}
+
+function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly) {
+  const groups = PREP_GROUPS.reduce((acc, group) => ({ ...acc, [group.key]: [] }), {})
+
+  orders.forEach((session) => {
+    const sessionOrders = session.orders || []
+    const packageOrders = sessionOrders.filter((order) => order.order_type === 'package' && order.status === 'confirmed')
+    const menuItems = sessionOrders.filter((order) => order.order_type === 'item')
+    const hasMenuItems = menuItems.length > 0
+
+    if (combinedOnly && !hasMenuItems) return
+    if (methodFilter !== 'all' && session.delivery_type !== methodFilter) return
+
+    packageOrders.forEach((pkg) => {
+      if (pkg.order_date !== prepDate) return
+      const key = getPackagePrepKey(pkg)
+      if (!key || !groups[key]) return
+
+      groups[key].push({
+        id: pkg.id,
+        session_id: session.session_id,
+        order_reference: session.order_reference || pkg.order_reference || '-',
+        student_name: session.student_name || pkg.student_name || 'Student',
+        phone_number: session.phone_number || pkg.phone_number || '',
+        student_email: session.student_email || pkg.student_email || '',
+        delivery_type: session.delivery_type || pkg.delivery_type || 'takeaway',
+        delivery_address: session.delivery_address || pkg.delivery_address || '',
+        order_date: pkg.order_date,
+        meal_type_name: pkg.meal_type_name,
+        preference: pkg.preference,
+        quantity: Number(pkg.quantity || 1),
+        has_menu_items: hasMenuItems,
+        menu_items: menuItems,
+      })
+    })
+  })
+
+  return groups
+}
+
+function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersSynced }) {
   const [loading,      setLoading]      = useState(true)
   const [generating,   setGenerating]   = useState(null)
   const [confirming,   setConfirming]   = useState(null)
   const [cancelling,   setCancelling]   = useState(null)
+  const [completing,   setCompleting]   = useState(null)
   const [printBillId,  setPrintBillId]  = useState(null)
+  const [printAnchor,  setPrintAnchor]  = useState(null)
   const [showConfirm,  setShowConfirm]  = useState(false)
   const [hiddenKeys,   setHiddenKeys]   = useState(getHidden)
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [typeFilter,   setTypeFilter]   = useState('all')
 
   const sessionKey = (s) => s.session_id || `single-${s.orders[0]?.id}`
 
@@ -224,8 +457,9 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
     try {
       const { data } = await getOnlineOrders()
       setOrders(data)
+      onOrdersSynced?.(data)
     } catch { /* ignore */ } finally { setLoading(false) }
-  }, [setOrders])
+  }, [setOrders, onOrdersSynced])
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
@@ -263,15 +497,53 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
     } finally { setCancelling(null) }
   }
 
+  const handleComplete = async (session) => {
+    const key = session.session_id || session.orders[0]?.id
+    setCompleting(key)
+    try {
+      await Promise.all(session.orders.map((o) => updateOrderStatus(o.id, 'completed')))
+      setOrders((prev) => prev.map((s) => {
+        if ((session.session_id && s.session_id === session.session_id) || s === session) {
+          return { ...s, status: 'completed', orders: s.orders.map((o) => ({ ...o, status: 'completed' })) }
+        }
+        return s
+      }))
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to complete order.')
+    } finally { setCompleting(null) }
+  }
+
   // Generate bill (only for confirmed sessions)
-  const handleGenerateBill = async (session) => {
+  const handleGenerateBill = async (session, anchorEl) => {
     const firstOrderId = session.orders[0]?.id
     if (!firstOrderId) return
+    if (anchorEl?.getBoundingClientRect) {
+      const rect = anchorEl.getBoundingClientRect()
+      setPrintAnchor({
+        top: rect.top,
+        height: rect.height,
+      })
+    } else {
+      setPrintAnchor(null)
+    }
     setGenerating(session.session_id || firstOrderId)
     try {
       const { data } = await generateOnlineBill(firstOrderId)
+      setOrders((prev) => prev.map((s) => {
+        const sameSession = session.session_id
+          ? s.session_id === session.session_id
+          : s.orders?.[0]?.id === firstOrderId
+        if (!sameSession) return s
+        return {
+          ...s,
+          bill_number: data.bill_number || s.bill_number || '',
+          cashier_name: data.cashier_name || s.cashier_name || '',
+          orders: s.orders.map((o) => ({ ...o, bill_number: data.bill_number || o.bill_number || '' })),
+        }
+      }))
       setPrintBillId(data.id)
     } catch (err) {
+      setPrintAnchor(null)
       alert(err.response?.data?.detail || 'Failed to generate bill.')
     } finally { setGenerating(null) }
   }
@@ -279,8 +551,190 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
   const statusColor = (s) => ({
     pending:   { bg: '#fffbeb', color: '#92400e', border: '#fcd34d' },
     confirmed: { bg: '#ecfdf5', color: '#065f46', border: '#6ee7b7' },
+    completed: { bg: '#eef2ff', color: '#3730a3', border: '#a5b4fc' },
     cancelled: { bg: '#fef2f2', color: '#991b1b', border: '#fca5a5' },
   }[s] || { bg: '#f3f4f6', color: '#374151', border: '#d1d5db' })
+
+  const visibleOrders = useMemo(() => {
+    return orders
+      .filter((session) => !hiddenKeys.has(sessionKey(session)))
+      .map((session) => ({
+        ...session,
+        status: getOnlineSessionStatus(session),
+        orderGroup: getOnlineSessionType(session),
+      }))
+      .filter((session) => statusFilter === 'all' || session.status === statusFilter)
+      .filter((session) => typeFilter === 'all' || session.orderGroup === typeFilter)
+  }, [orders, hiddenKeys, statusFilter, typeFilter])
+
+  const groupedOrders = useMemo(() => {
+    const grouped = {}
+    ONLINE_STATUS_GROUPS.forEach(({ key }) => {
+      grouped[key] = { item: [], package: [], combined: [] }
+    })
+    visibleOrders.forEach((session) => {
+      if (!grouped[session.status]) grouped[session.status] = { item: [], package: [], combined: [] }
+      grouped[session.status][session.orderGroup].push(session)
+    })
+    return grouped
+  }, [visibleOrders])
+
+  const counts = useMemo(() => {
+    const visible = orders
+      .filter((session) => !hiddenKeys.has(sessionKey(session)))
+      .map((session) => ({ ...session, status: getOnlineSessionStatus(session), orderGroup: getOnlineSessionType(session) }))
+    return {
+      all: visible.length,
+      pending: visible.filter((session) => session.status === 'pending').length,
+      confirmed: visible.filter((session) => session.status === 'confirmed').length,
+      completed: visible.filter((session) => session.status === 'completed').length,
+      cancelled: visible.filter((session) => session.status === 'cancelled').length,
+      item: visible.filter((session) => session.orderGroup === 'item').length,
+      package: visible.filter((session) => session.orderGroup === 'package').length,
+      combined: visible.filter((session) => session.orderGroup === 'combined').length,
+    }
+  }, [orders, hiddenKeys])
+
+  const renderSessionCard = (session, idx) => {
+    const sc = statusColor(session.status)
+    const key = sessionKey(session) || `session-${idx}`
+    const genKey = session.session_id || session.orders[0]?.id
+    const typeLabel = ONLINE_TYPE_GROUPS.find((group) => group.key === session.orderGroup)?.label || 'Online Order'
+    const readyLabel = getPackageReadyLabel(session)
+    const deliveryLabel = session.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'
+    const completionLabel = session.delivery_type === 'delivery' ? 'Mark Delivered' : 'Mark Picked Up'
+    const billNumber = session.bill_number || session.orders.find((o) => o.bill_number)?.bill_number || ''
+    const orderRef = session.order_reference || session.orders[0]?.order_reference || '-'
+    const totalQty = getSessionTotalQuantity(session)
+    const busy = confirming === genKey || cancelling === genKey || completing === genKey || generating === genKey
+
+    return (
+      <div key={key} className="cd-hbill-card" style={{ borderLeft: `3px solid ${sc.border}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 16px', gap: '14px' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <span style={{ fontWeight: 800, fontSize: '13px', color: 'var(--espresso)' }}>
+                {session.student_name || 'Student'}
+              </span>
+              <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px', background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, textTransform: 'uppercase' }}>
+                {session.status === 'cancelled' ? 'Rejected / Cancelled' : session.status}
+              </span>
+              <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px', background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db' }}>
+                {typeLabel}
+              </span>
+              <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px', background: session.delivery_type === 'delivery' ? '#eff6ff' : '#f8fafc', color: session.delivery_type === 'delivery' ? '#1d4ed8' : '#475569', border: '1px solid #cbd5e1' }}>
+                {deliveryLabel}
+              </span>
+            </div>
+
+            <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
+              Order Ref: <strong>{orderRef}</strong>
+            </div>
+            {billNumber && (
+              <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
+                Bill No: <strong>{billNumber}</strong>
+              </div>
+            )}
+
+            {readyLabel && (
+              <div style={{ fontSize: '11px', color: '#166534', fontWeight: 800, marginBottom: '6px' }}>
+                Ready: {readyLabel}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '8px' }}>
+              {session.orders.map((o) => (
+                <div key={o.id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontWeight: 800, color: 'var(--espresso)' }}>
+                    {getOnlineOrderLabel(o)}
+                  </span>
+                  {' x '}{o.quantity}
+                  {o.order_type !== 'item' && o.order_date && (
+                    <span style={{ marginLeft: '6px', fontSize: '11px', background: '#f3f4f6', borderRadius: '4px', padding: '1px 5px', color: '#6b7280' }}>
+                      {o.order_date}
+                    </span>
+                  )}
+                  <span style={{ marginLeft: '6px', fontSize: '11px', opacity: 0.75 }}>
+                    ({o.order_type === 'item' ? 'Menu item' : 'Meal package'})
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              Placed {new Date(session.created_at).toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              {' '}· {totalQty} total item{totalQty === 1 ? '' : 's'}
+            </div>
+            {session.phone_number && (
+              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>Phone: {session.phone_number}</div>
+            )}
+            {session.student_email && (
+              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>Email: {session.student_email}</div>
+            )}
+            {session.delivery_address && (
+              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>
+                {session.delivery_type === 'delivery' ? 'Address' : 'Pickup note'}: {session.delivery_address}
+              </div>
+            )}
+            {session.delivery_type === 'delivery' && (
+              <div style={{ fontSize: '11px', color: '#166534', marginTop: '3px', fontWeight: 800 }}>
+                Delivery Fee: Rs.{Number(session.delivery_fee ?? 0).toFixed(2)}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '7px', flexShrink: 0, minWidth: '132px' }}>
+            {session.status === 'pending' && (
+              <>
+                <button
+                  onClick={() => handleConfirm(session)}
+                  disabled={busy}
+                  style={{ background: 'var(--forest)', color: '#fff', border: 'none', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}
+                >
+                  {confirming === genKey ? 'Confirming...' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => handleCancel(session)}
+                  disabled={busy}
+                  style={{ background: '#fef2f2', color: '#991b1b', border: '1.5px solid #fca5a5', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}
+                >
+                  {cancelling === genKey ? 'Rejecting...' : 'Reject'}
+                </button>
+              </>
+            )}
+            {session.status === 'confirmed' && (
+              <>
+                <button
+                  onClick={(e) => handleGenerateBill(session, e.currentTarget)}
+                  disabled={generating === genKey || Boolean(billNumber)}
+                  style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #93c5fd', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: billNumber ? 'default' : 'pointer', opacity: generating === genKey ? 0.6 : 1 }}
+                >
+                  {billNumber ? 'Bill Ready' : generating === genKey ? 'Generating...' : 'Generate Bill'}
+                </button>
+                <button
+                  onClick={() => handleComplete(session)}
+                  disabled={busy}
+                  style={{ background: '#eef2ff', color: '#3730a3', border: '1.5px solid #a5b4fc', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}
+                >
+                  {completing === genKey ? 'Completing...' : completionLabel}
+                </button>
+              </>
+            )}
+            {session.status === 'completed' && (
+              <span style={{ textAlign: 'center', background: '#eef2ff', color: '#3730a3', border: '1px solid #a5b4fc', borderRadius: '6px', padding: '7px 10px', fontSize: '12px', fontWeight: 800 }}>
+                {session.delivery_type === 'delivery' ? 'Delivered' : 'Picked Up'}
+              </span>
+            )}
+            {session.status === 'cancelled' && (
+              <span style={{ textAlign: 'center', background: '#fef2f2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '6px', padding: '7px 10px', fontSize: '12px', fontWeight: 800 }}>
+                Rejected
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="cd-history-col cd-panel-anim">
@@ -301,7 +755,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
       <div className="cd-history-topbar">
         <div>
           <div className="cd-history-heading">Online Orders</div>
-          <div className="cd-history-subheading">Live student orders — generate bill to confirm</div>
+          <div className="cd-history-subheading">Live student orders grouped by status and order type</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {newBadge > 0 && (
@@ -316,110 +770,360 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge }) {
         </div>
       </div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '10px', marginBottom: '14px' }}>
+        {[
+          { label: 'All', value: counts.all },
+          { label: 'Pending', value: counts.pending },
+          { label: 'Confirmed', value: counts.confirmed },
+          { label: 'Completed', value: counts.completed },
+          { label: 'Rejected', value: counts.cancelled },
+        ].map((stat) => (
+          <div key={stat.label} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '18px', fontWeight: 900, color: 'var(--espresso)', lineHeight: 1 }}>{stat.value}</div>
+            <div style={{ fontSize: '10px', color: '#6b7280', fontWeight: 800, marginTop: '4px', textTransform: 'uppercase' }}>{stat.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+        {[{ key: 'all', label: `All (${counts.all})` }, ...ONLINE_STATUS_GROUPS.map((group) => ({
+          key: group.key,
+          label: `${group.key === 'cancelled' ? 'Rejected' : group.label.replace(' Orders', '')} (${counts[group.key] || 0})`,
+        }))].map((filter) => (
+          <button
+            key={filter.key}
+            type="button"
+            onClick={() => setStatusFilter(filter.key)}
+            style={{
+              border: statusFilter === filter.key ? '1.5px solid var(--forest-light)' : '1.5px solid #e5e7eb',
+              background: statusFilter === filter.key ? '#f0fff0' : '#fff',
+              color: statusFilter === filter.key ? 'var(--forest)' : '#6b7280',
+              borderRadius: '8px',
+              padding: '7px 11px',
+              fontSize: '12px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
+        {[{ key: 'all', label: 'All Types' }, ...ONLINE_TYPE_GROUPS.map((group) => ({
+          key: group.key,
+          label: `${group.label} (${counts[group.key] || 0})`,
+        }))].map((filter) => (
+          <button
+            key={filter.key}
+            type="button"
+            onClick={() => setTypeFilter(filter.key)}
+            style={{
+              border: typeFilter === filter.key ? '1.5px solid #1d4ed8' : '1.5px solid #e5e7eb',
+              background: typeFilter === filter.key ? '#eff6ff' : '#fff',
+              color: typeFilter === filter.key ? '#1d4ed8' : '#6b7280',
+              borderRadius: '8px',
+              padding: '7px 11px',
+              fontSize: '12px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
-      ) : orders.filter((s) => !hiddenKeys.has(sessionKey(s))).length === 0 ? (
+      ) : visibleOrders.length === 0 ? (
         <div className="cd-history-empty">
           <div className="cd-history-empty-icon">📭</div>
-          No online orders yet.
+          No online orders match these filters.
         </div>
       ) : (
         <div className="cd-history-list">
-          {orders.filter((s) => !hiddenKeys.has(sessionKey(s))).map((session, idx) => {
-            const sc       = statusColor(session.status)
-            const key      = session.session_id || `single-${idx}`
-            const genKey   = session.session_id || session.orders[0]?.id
+          {ONLINE_STATUS_GROUPS.map((statusGroup) => {
+            const statusHasOrders = ONLINE_TYPE_GROUPS.some((typeGroup) => groupedOrders[statusGroup.key]?.[typeGroup.key]?.length)
+            if (!statusHasOrders) return null
             return (
-              <div key={key} className="cd-hbill-card" style={{ borderLeft: `3px solid ${sc.border}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 16px', gap: '12px' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--espresso)', marginBottom: '4px' }}>
-                      {session.student_name}
-                    </div>
-                    {/* List all order lines */}
-                    {session.orders.map((o) => (
-                      <div key={o.id} style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '2px' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--espresso)' }}>
-                          {o.package_label || (o.order_type === 'item' ? o.item_name : o.meal_type_name)}
-                        </span>
-                        {' × '}{o.quantity}
-                        {o.order_type !== 'item' && o.order_date && (
-                          <span style={{ marginLeft: '6px', fontSize: '11px', background: '#f3f4f6', borderRadius: '4px', padding: '1px 5px', color: '#6b7280' }}>
-                            📅 {o.order_date}
-                          </span>
-                        )}
-                        <span style={{ marginLeft: '6px', fontSize: '11px', opacity: 0.6 }}>
-                          ({o.order_type === 'item' ? 'Menu Item' : 'Package'})
-                        </span>
-                      </div>
-                    ))}
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      {session.delivery_type === 'delivery' ? '🚚 Delivery' : '🥡 Takeaway'} &nbsp;·&nbsp;
-                      {new Date(session.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                    {session.student_email && (
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>✉ {session.student_email}</div>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', flexShrink: 0 }}>
-                    <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: sc.bg, color: sc.color, border: `1px solid ${sc.border}` }}>
-                      {session.status}
-                    </span>
-                    {session.status === 'pending' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <button
-                          onClick={() => handleConfirm(session)}
-                          disabled={confirming === genKey || cancelling === genKey}
-                          style={{ background: 'var(--forest)', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: (confirming === genKey || cancelling === genKey) ? 0.6 : 1 }}
-                        >
-                          {confirming === genKey ? '…' : '✅ Confirm'}
-                        </button>
-                        <button
-                          onClick={() => handleCancel(session)}
-                          disabled={confirming === genKey || cancelling === genKey}
-                          style={{ background: '#fef2f2', color: '#991b1b', border: '1.5px solid #fca5a5', borderRadius: '6px', padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: (confirming === genKey || cancelling === genKey) ? 0.6 : 1 }}
-                        >
-                          {cancelling === genKey ? '…' : '✕ Reject'}
-                        </button>
-                      </div>
-                    )}
-                    {session.status === 'confirmed' && (
-                      <button
-                        onClick={() => handleGenerateBill(session)}
-                        disabled={generating === genKey}
-                        style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #93c5fd', borderRadius: '6px', padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: generating === genKey ? 0.6 : 1 }}
-                      >
-                        {generating === genKey ? '…' : '🧾 Generate Bill'}
-                      </button>
-                    )}
-                  </div>
+              <section key={statusGroup.key} style={{ marginBottom: '18px' }}>
+                <div style={{ fontWeight: 900, color: 'var(--espresso)', fontSize: '14px', margin: '4px 0 10px' }}>
+                  {statusGroup.label}
                 </div>
-              </div>
+                {ONLINE_TYPE_GROUPS.map((typeGroup) => {
+                  const sessions = groupedOrders[statusGroup.key]?.[typeGroup.key] || []
+                  if (sessions.length === 0) return null
+                  return (
+                    <div key={`${statusGroup.key}-${typeGroup.key}`} style={{ marginBottom: '14px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 900, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                        {typeGroup.label} ({sessions.length})
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {sessions.map((session, idx) => renderSessionCard(session, idx))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </section>
             )
           })}
         </div>
       )}
 
       {printBillId && (
-        <PrintBillView billId={printBillId} onClose={() => setPrintBillId(null)} />
+        <PrintBillView
+          billId={printBillId}
+          anchorRect={printAnchor}
+          onClose={() => {
+            setPrintBillId(null)
+            setPrintAnchor(null)
+          }}
+        />
       )}
     </div>
   )
 }
 
 // ── Checkout Confirmation Modal ──────────────────────────────────────────────
-function CheckoutConfirmModal({ billLines, totalAmount, submitting, onConfirm, onCancel }) {
+function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
+  const [prepDate, setPrepDate] = useState(toDateInputValue())
+  const [methodFilter, setMethodFilter] = useState('all')
+  const [combinedOnly, setCombinedOnly] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const refreshOrders = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await getOnlineOrders()
+      setOrders(data)
+      onOrdersSynced?.(data)
+    } catch {
+      // Keep the latest loaded snapshot if refresh fails.
+    } finally {
+      setLoading(false)
+    }
+  }, [setOrders, onOrdersSynced])
+
+  useEffect(() => { refreshOrders() }, [refreshOrders])
+
+  const prepGroups = useMemo(
+    () => buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly),
+    [orders, prepDate, methodFilter, combinedOnly],
+  )
+
+  const totals = useMemo(() => {
+    const groupTotals = {}
+    let all = 0
+    PREP_GROUPS.forEach((group) => {
+      const total = (prepGroups[group.key] || []).reduce((sum, row) => sum + row.quantity, 0)
+      groupTotals[group.key] = total
+      all += total
+    })
+    return { ...groupTotals, all }
+  }, [prepGroups])
+
+  const hasRows = totals.all > 0
+
+  return (
+    <div className="cd-history-col cd-panel-anim">
+      <div className="cd-history-topbar">
+        <div>
+          <div className="cd-history-heading">Meal Package Prep</div>
+          <div className="cd-history-subheading">Confirmed packages to prepare by meal, preference, method, and date</div>
+        </div>
+        <button className="cd-btn-clear" onClick={refreshOrders} disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '16px', alignItems: 'center' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', fontWeight: 800, color: '#6b7280', textTransform: 'uppercase' }}>
+          Prep Date
+          <input
+            type="date"
+            value={prepDate}
+            onChange={(e) => setPrepDate(e.target.value)}
+            style={{ border: '1.5px solid #e5e7eb', borderRadius: '8px', padding: '8px 10px', fontSize: '13px', color: 'var(--espresso)', fontFamily: 'inherit' }}
+          />
+        </label>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignSelf: 'flex-end' }}>
+          {[
+            { key: 'all', label: 'All Methods' },
+            { key: 'takeaway', label: 'Takeaway' },
+            { key: 'delivery', label: 'Delivery' },
+          ].map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setMethodFilter(filter.key)}
+              style={{
+                border: methodFilter === filter.key ? '1.5px solid var(--forest-light)' : '1.5px solid #e5e7eb',
+                background: methodFilter === filter.key ? '#f0fff0' : '#fff',
+                color: methodFilter === filter.key ? 'var(--forest)' : '#6b7280',
+                borderRadius: '8px',
+                padding: '8px 11px',
+                fontSize: '12px',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              {filter.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setCombinedOnly((value) => !value)}
+            style={{
+              border: combinedOnly ? '1.5px solid #1d4ed8' : '1.5px solid #e5e7eb',
+              background: combinedOnly ? '#eff6ff' : '#fff',
+              color: combinedOnly ? '#1d4ed8' : '#6b7280',
+              borderRadius: '8px',
+              padding: '8px 11px',
+              fontSize: '12px',
+              fontWeight: 800,
+              cursor: 'pointer',
+            }}
+          >
+            Combined Only
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+        {[...PREP_GROUPS, { key: 'all', label: 'Total Packages', ready: 'All confirmed' }].map((group) => (
+          <div key={group.key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
+            <div style={{ fontSize: '22px', fontWeight: 900, color: group.key === 'all' ? 'var(--forest)' : 'var(--espresso)', lineHeight: 1 }}>
+              {totals[group.key] || 0}
+            </div>
+            <div style={{ fontSize: '11px', color: '#6b7280', fontWeight: 900, marginTop: '5px' }}>{group.label}</div>
+            <div style={{ fontSize: '10px', color: '#166534', fontWeight: 800, marginTop: '3px' }}>{group.ready}</div>
+          </div>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
+      ) : !hasRows ? (
+        <div className="cd-history-empty">
+          <div className="cd-history-empty-icon">📭</div>
+          No confirmed meal packages match these prep filters.
+        </div>
+      ) : (
+        <div className="cd-history-list">
+          {PREP_GROUPS.map((group) => {
+            const rows = prepGroups[group.key] || []
+            if (rows.length === 0) return null
+            return (
+              <section key={group.key} style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ fontWeight: 900, color: 'var(--espresso)', fontSize: '14px' }}>{group.label}</div>
+                  <div style={{ fontSize: '12px', fontWeight: 900, color: '#166534' }}>
+                    {totals[group.key]} package{totals[group.key] === 1 ? '' : 's'} · Ready {group.ready}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {rows.map((row) => (
+                    <article key={`${group.key}-${row.id}`} className="cd-hbill-card" style={{ borderLeft: '3px solid #6ee7b7' }}>
+                      <div style={{ padding: '14px 16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '5px' }}>
+                              <strong style={{ fontSize: '13px', color: 'var(--espresso)' }}>{row.order_reference}</strong>
+                              <span style={{ fontSize: '10px', fontWeight: 900, padding: '2px 8px', borderRadius: '999px', background: row.delivery_type === 'delivery' ? '#eff6ff' : '#f8fafc', color: row.delivery_type === 'delivery' ? '#1d4ed8' : '#475569', border: '1px solid #cbd5e1' }}>
+                                {row.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'}
+                              </span>
+                              {row.has_menu_items && (
+                                <span style={{ fontSize: '10px', fontWeight: 900, padding: '2px 8px', borderRadius: '999px', background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa' }}>
+                                  Package + Menu
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                              Student: <strong>{row.student_name}</strong> · Qty: <strong>{row.quantity}</strong> · Date: <strong>{row.order_date}</strong>
+                            </div>
+                            {row.phone_number && (
+                              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>Phone: {row.phone_number}</div>
+                            )}
+                            {row.delivery_address && (
+                              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>
+                                {row.delivery_type === 'delivery' ? 'Address' : 'Pickup note'}: {row.delivery_address}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                            <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--forest)', lineHeight: 1 }}>{row.quantity}</div>
+                            <div style={{ fontSize: '10px', color: '#166534', fontWeight: 900, marginTop: '4px' }}>Prepare</div>
+                          </div>
+                        </div>
+
+                        {row.menu_items.length > 0 && (
+                          <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #e5e7eb' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 900, color: '#6b7280', textTransform: 'uppercase', marginBottom: '5px' }}>
+                              Combined menu items
+                            </div>
+                            {row.menu_items.map((item) => (
+                              <div key={item.id} style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                <strong style={{ color: 'var(--espresso)' }}>{getOnlineOrderLabel(item)}</strong> x {item.quantity}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CheckoutConfirmModal({ billLines, totalAmount, customerName, onCustomerNameChange, submitting, onConfirm, onCancel }) {
+  const itemCount = billLines.reduce((sum, line) => sum + line.qty, 0)
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: '#fff', borderRadius: '14px', padding: '28px 28px 24px', maxWidth: '400px', width: '92%', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+      <div style={{ background: '#fff', borderRadius: '14px', padding: '28px 28px 24px', maxWidth: '440px', width: '92%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
         <div style={{ textAlign: 'center', marginBottom: '18px' }}>
-          <div style={{ fontSize: '30px', marginBottom: '6px' }}>🧾</div>
+          <div style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '0.12em', color: '#3D6B38', textTransform: 'uppercase', marginBottom: '6px' }}>{itemCount} items selected</div>
           <div style={{ fontWeight: 700, fontSize: '16px', color: '#2C1A0E' }}>Checkout Confirmation</div>
           <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>Review the bill before generating</div>
         </div>
 
-        {/* Bill lines */}
-        <div style={{ borderTop: '1px dashed #e5e7eb', borderBottom: '1px dashed #e5e7eb', padding: '12px 0', marginBottom: '14px' }}>
+      <div style={{ marginBottom: '16px' }}>
+        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#6b7280', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+          Customer Name
+        </label>
+        <input
+          type="text"
+          value={customerName}
+          onChange={(e) => onCustomerNameChange(e.target.value)}
+          placeholder="Optional"
+          disabled={submitting}
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '10px 12px',
+            borderRadius: '8px',
+            border: '1.5px solid #e5e7eb',
+            fontSize: '13px',
+            outline: 'none',
+            background: '#f9fafb',
+            color: '#2C1A0E',
+            fontFamily: 'inherit',
+          }}
+        />
+      </div>
+
+      {/* Bill lines */}
+      <div style={{ borderTop: '1px dashed #e5e7eb', borderBottom: '1px dashed #e5e7eb', padding: '12px 0', marginBottom: '14px', overflowY: 'auto', maxHeight: 'min(320px, 38vh)', minHeight: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: 700, color: '#9ca3af', marginBottom: '8px', textTransform: 'uppercase' }}>
             <span>Item</span><span>Amount</span>
           </div>
@@ -450,7 +1154,7 @@ function CheckoutConfirmModal({ billLines, totalAmount, submitting, onConfirm, o
             onClick={onConfirm}
             disabled={submitting}
             style={{ flex: 2, padding: '10px', borderRadius: '8px', border: 'none', background: 'var(--forest, #3D6B38)', color: '#fff', fontWeight: 700, fontSize: '13px', cursor: 'pointer', opacity: submitting ? 0.7 : 1 }}
-          >{submitting ? 'Generating…' : '✅ Confirm & Generate Bill'}</button>
+          >{submitting ? 'Generating...' : 'Confirm & Generate Bill'}</button>
         </div>
       </div>
     </div>
@@ -458,12 +1162,51 @@ function CheckoutConfirmModal({ billLines, totalAmount, submitting, onConfirm, o
 }
 
 // ── Walk-in Sale Tab (POS) ───────────────────────────────────────────────────
+const compareMenuItemsByCode = (a, b) => {
+  const parseCode = (item) => {
+    const code = (item.item_id || '').trim()
+    const match = code.match(/^(\d+)([A-Za-z].*)$/)
+    return {
+      code,
+      group: match ? match[2].toUpperCase() : code.toUpperCase(),
+      number: match ? Number(match[1]) : Number.MAX_SAFE_INTEGER,
+    }
+  }
+  const codeA = parseCode(a)
+  const codeB = parseCode(b)
+
+  if (codeA.code && !codeB.code) return -1
+  if (!codeA.code && codeB.code) return 1
+
+  const groupCompare = codeA.group.localeCompare(codeB.group, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+
+  if (groupCompare !== 0) return groupCompare
+
+  const numberCompare = codeA.number - codeB.number
+  if (numberCompare !== 0) return numberCompare
+
+  const codeCompare = codeA.code.localeCompare(codeB.code, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+
+  if (codeCompare !== 0) return codeCompare
+  return (a.name || '').localeCompare(b.name || '', undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+}
+
 function WalkinSaleTab({ onBillCreated }) {
   const [allItems,    setAllItems]    = useState([])
   const [categories,  setCategories]  = useState([])
   const [loadingMenu, setLoadingMenu] = useState(true)
   const [search,      setSearch]      = useState('')
   const [activeCat,   setActiveCat]   = useState('all')
+  const [customerName, setCustomerName] = useState('')
   // bill: { [itemId]: { item, qty } }
   const [bill,        setBill]        = useState({})
   const [showCheckout, setShowCheckout] = useState(false)
@@ -489,10 +1232,12 @@ function WalkinSaleTab({ onBillCreated }) {
       .filter((i) => i.is_available)
       .filter((i) => activeCat === 'all' || i.category === Number(activeCat))
       .filter((i) => i.name.toLowerCase().includes(q) || (i.item_id || '').toLowerCase().includes(q))
+      .sort(compareMenuItemsByCode)
   }, [allItems, activeCat, search])
 
   // Bill helpers
   const billLines   = Object.values(bill)
+  const billItemCount = billLines.reduce((sum, line) => sum + line.qty, 0)
   const totalAmount = billLines.reduce((s, l) => s + l.qty * parseFloat(l.item.price), 0)
 
   const addItem = (item) => {
@@ -514,7 +1259,11 @@ function WalkinSaleTab({ onBillCreated }) {
     setBill((prev) => { const { [itemId]: _, ...rest } = prev; return rest })
   }
 
-  const clearBill = () => { setBill({}); setError('') }
+  const clearBill = () => {
+    setBill({})
+    setCustomerName('')
+    setError('')
+  }
 
   // Open confirmation modal
   const handleCheckoutClick = () => {
@@ -528,6 +1277,7 @@ function WalkinSaleTab({ onBillCreated }) {
     setSubmitting(true)
     try {
       const payload = {
+        customer_name: customerName.trim(),
         items: billLines.map((l) => ({
           name:       l.item.name,
           quantity:   l.qty,
@@ -587,7 +1337,12 @@ function WalkinSaleTab({ onBillCreated }) {
         ) : (
           <div className="cd-items-grid">
             {filteredItems.map((item) => (
-              <div key={item.id} className="cd-item-card" onClick={() => addItem(item)}>
+              <div
+                key={item.id}
+                className="cd-item-card"
+                data-item-name={item.name}
+                onClick={() => addItem(item)}
+              >
                 {item.image_url
                   ? <img src={item.image_url} alt={item.name} className="cd-item-img" />
                   : <div className="cd-item-placeholder">🍽️</div>
@@ -607,8 +1362,11 @@ function WalkinSaleTab({ onBillCreated }) {
       <div className="cd-bill-panel cd-panel-anim">
 
         <div className="cd-bill-header">
-          <span className="cd-bill-title">🧾 Bill</span>
-          {billLines.length > 0 && <span className="cd-bill-count">{billLines.length}</span>}
+          <div>
+            <span className="cd-bill-title">Bill</span>
+            <span className="cd-bill-subtitle">Selected items</span>
+          </div>
+          {billItemCount > 0 && <span className="cd-bill-count">{billItemCount} items</span>}
         </div>
 
         <div className="cd-bill-items">
@@ -642,22 +1400,27 @@ function WalkinSaleTab({ onBillCreated }) {
 
         {billLines.length > 0 && (
           <div className="cd-bill-footer">
-            {billLines.map(({ item, qty }) => (
-              <div key={item.id} className="cd-bill-subtotal-row">
-                <span>{item.name} × {qty}</span>
-                <span>Rs.{(qty * parseFloat(item.price)).toFixed(2)}</span>
+            <div className="cd-bill-summary">
+              <div className="cd-bill-summary-row">
+                <span>Unique items</span>
+                <strong>{billLines.length}</strong>
               </div>
-            ))}
+              <div className="cd-bill-summary-row">
+                <span>Total quantity</span>
+                <strong>{billItemCount}</strong>
+              </div>
+            </div>
             <div className="cd-bill-divider" />
             <div className="cd-bill-total-row">
               <span className="cd-bill-total-label">TOTAL</span>
               <span className="cd-bill-total-val">Rs.{totalAmount.toFixed(2)}</span>
             </div>
+            <div className="cd-bill-footer-note">Full item details are listed above.</div>
             <button
               className="cd-btn-create"
               onClick={handleCheckoutClick}
             >
-              🛒 Checkout
+              Checkout
             </button>
             <button className="cd-btn-clear" onClick={clearBill}>Clear bill</button>
           </div>
@@ -669,6 +1432,8 @@ function WalkinSaleTab({ onBillCreated }) {
         <CheckoutConfirmModal
           billLines={billLines}
           totalAmount={totalAmount}
+          customerName={customerName}
+          onCustomerNameChange={setCustomerName}
           submitting={submitting}
           onConfirm={handleConfirmCheckout}
           onCancel={() => setShowCheckout(false)}
@@ -691,6 +1456,164 @@ export default function CashierDashboard() {
   const [historySummary, setHistorySummary] = useState(null)
   const [onlineOrders,   setOnlineOrders]   = useState([])
   const [onlineBadge,    setOnlineBadge]    = useState(0)
+  const [wsStatus,       setWsStatus]       = useState('connecting')
+  const [toastQueue,     setToastQueue]     = useState([])
+  const [activeToast,    setActiveToast]    = useState(null)
+  const onlineSessionKeysRef = useRef(new Set())
+  const seenOnlineSessionKeysRef = useRef(loadSeenOnline())
+
+  const queueNewOrderToast = useCallback((source) => {
+    setToastQueue((prev) => [...prev, buildOrderToast(source)])
+  }, [])
+
+  const playNewOrderSound = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = new AudioCtx()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(880, ctx.currentTime)
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + 0.22)
+      osc.onended = () => ctx.close()
+    } catch {
+      // Ignore browser audio policy errors.
+    }
+  }, [])
+
+  const showDesktopNewOrder = useCallback((order) => {
+    if (typeof window === 'undefined') return
+    if (!('Notification' in window)) return
+    if (document.visibilityState === 'visible') return
+    if (Notification.permission !== 'granted') return
+
+    const toast = buildOrderToast(order)
+    if (toast.kind !== 'order') return
+    const n = new Notification('New Online Student Order', {
+      body: `${toast.studentName} - ${toast.itemSummary} - ${toast.deliveryType === 'delivery' ? 'Delivery' : 'Takeaway'}`,
+    })
+    n.onclick = () => {
+      window.focus()
+      setActiveTab('online')
+      setOnlineBadge(0)
+      n.close()
+    }
+  }, [])
+
+  const markSessionAsSeen = useCallback((sessionKey) => {
+    if (!sessionKey) return
+    if (seenOnlineSessionKeysRef.current.has(sessionKey)) return
+    seenOnlineSessionKeysRef.current.add(sessionKey)
+    saveSeenOnline(seenOnlineSessionKeysRef.current)
+  }, [])
+
+  const notifyUnseenFromSnapshot = useCallback((sessions) => {
+    if (!Array.isArray(sessions) || sessions.length === 0) return
+
+    const unseen = sessions.filter((s) => {
+      if ((s.status || '').toLowerCase() !== 'pending') return false
+      const key = s.session_id || `single-${s.orders?.[0]?.id || s.id}`
+      return !seenOnlineSessionKeysRef.current.has(key)
+    })
+    if (unseen.length === 0) return
+
+    const capped = unseen.slice(0, 4)
+    capped.forEach((s) => {
+      const key = s.session_id || `single-${s.orders?.[0]?.id || s.id}`
+      const first = s.orders?.[0] || {}
+      const toastOrder = {
+        id: first.id || s.id || key,
+        session_id: s.session_id || null,
+        student_name: s.student_name || first.student_name || 'Student',
+        package_label: first.package_label || first.item_name || first.meal_type_name || 'Order',
+        item_name: first.item_name || '',
+        meal_type_name: first.meal_type_name || '',
+        quantity: first.quantity || 1,
+        delivery_type: s.delivery_type || first.delivery_type || 'takeaway',
+        created_at: s.created_at || first.created_at || new Date().toISOString(),
+      }
+
+      markSessionAsSeen(key)
+      queueNewOrderToast(toastOrder)
+    })
+
+    if (unseen.length > capped.length) {
+      const extra = unseen.length - capped.length
+      queueNewOrderToast({
+        variant: 'aggregate',
+        count: extra,
+        created_at: new Date().toISOString(),
+      })
+    }
+
+    setOnlineBadge((c) => c + unseen.length)
+    playNewOrderSound()
+    if (unseen[0]) {
+      showDesktopNewOrder(unseen[0])
+    }
+  }, [markSessionAsSeen, playNewOrderSound, queueNewOrderToast, showDesktopNewOrder])
+
+  useEffect(() => {
+    if (activeToast || toastQueue.length === 0) return
+    setActiveToast(toastQueue[0])
+    setToastQueue((prev) => prev.slice(1))
+  }, [toastQueue, activeToast])
+
+  useEffect(() => {
+    if (!activeToast) return undefined
+    const timer = setTimeout(() => setActiveToast(null), 10000)
+    return () => clearTimeout(timer)
+  }, [activeToast])
+
+  useEffect(() => {
+    if (activeTab !== 'online') return
+    if (onlineBadge === 0) return
+    setOnlineBadge(0)
+  }, [activeTab, onlineBadge])
+
+  useEffect(() => {
+    const next = new Set()
+    onlineOrders.forEach((s) => {
+      const key = s.session_id || `single-${s.orders?.[0]?.id || s.id}`
+      next.add(key)
+    })
+    onlineSessionKeysRef.current = next
+  }, [onlineOrders])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    if (!('Notification' in window)) return undefined
+    if (Notification.permission !== 'default') return undefined
+
+    const requestOnFirstClick = () => {
+      Notification.requestPermission().catch(() => {})
+    }
+
+    window.addEventListener('click', requestOnFirstClick, { once: true })
+    return () => window.removeEventListener('click', requestOnFirstClick)
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { data } = await getOnlineOrders()
+        if (!alive) return
+        setOnlineOrders(data)
+        notifyUnseenFromSnapshot(data)
+      } catch {
+        // Ignore bootstrap sync errors.
+      }
+    })()
+    return () => { alive = false }
+  }, [notifyUnseenFromSnapshot])
 
   const handleNewOrder = useCallback((order) => {
     // If this session was hidden (cleared), unhide it so the new order shows
@@ -701,39 +1624,63 @@ export default function CashierDashboard() {
       hidden.delete(key)
       saveHidden(hidden)
     }
+    const isNewSession = !onlineSessionKeysRef.current.has(key)
+    if (isNewSession) onlineSessionKeysRef.current.add(key)
     setOnlineOrders((prev) => {
       if (sid) {
         const existing = prev.find((s) => s.session_id === sid)
         if (existing) {
           if (existing.orders.find((o) => o.id === order.id)) return prev
           return prev.map((s) => s.session_id === sid
-            ? { ...s, orders: [...s.orders, order] }
+            ? {
+              ...s,
+              order_reference: s.order_reference || order.order_reference || '-',
+              bill_number: s.bill_number || order.bill_number || '',
+              delivery_fee: s.delivery_fee ?? order.delivery_fee ?? '0.00',
+              orders: [...s.orders, order],
+            }
             : s
           )
         }
-        setOnlineBadge((c) => c + 1)
         return [{ session_id: sid, student_name: order.student_name, student_email: order.student_email,
+          order_reference: order.order_reference || '-',
+          bill_number: order.bill_number || '',
           created_at: order.created_at, delivery_type: order.delivery_type, delivery_address: order.delivery_address,
-          phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
+          delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
       }
       // No session — standalone
       if (prev.find((s) => !s.session_id && s.orders[0]?.id === order.id)) return prev
-      setOnlineBadge((c) => c + 1)
       return [{ session_id: null, student_name: order.student_name, student_email: order.student_email,
+        order_reference: order.order_reference || '-',
+        bill_number: order.bill_number || '',
         created_at: order.created_at, delivery_type: order.delivery_type, delivery_address: order.delivery_address,
-        phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
+        delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
     })
-  }, [])
+    if (isNewSession) {
+      markSessionAsSeen(key)
+      setOnlineBadge((c) => c + 1)
+      queueNewOrderToast(order)
+      playNewOrderSound()
+      showDesktopNewOrder(order)
+    }
+  }, [markSessionAsSeen, playNewOrderSound, queueNewOrderToast, showDesktopNewOrder])
 
   const handleOrderUpdated = useCallback((order) => {
     setOnlineOrders((prev) => prev.map((s) => ({
       ...s,
+      order_reference: s.order_reference || order.order_reference || '-',
+      bill_number: s.bill_number || order.bill_number || '',
+      delivery_fee: s.orders.some((o) => o.id === order.id) ? (order.delivery_fee ?? s.delivery_fee ?? '0.00') : s.delivery_fee,
       orders: s.orders.map((o) => o.id === order.id ? { ...o, ...order } : o),
       status: s.orders.some((o) => o.id === order.id) ? order.status : s.status,
     })))
   }, [])
 
-  useOrderSocket({ onNewOrder: handleNewOrder, onOrderUpdated: handleOrderUpdated })
+  useOrderSocket({
+    onNewOrder: handleNewOrder,
+    onOrderUpdated: handleOrderUpdated,
+    onStatusChange: setWsStatus,
+  })
 
   const fetchHistory = useCallback(async (date) => {
     setHistoryLoading(true)
@@ -749,8 +1696,11 @@ export default function CashierDashboard() {
         .map((b) => ({
           id:           `bill-${b.id}`,
           bill_id:      b.bill_number,
+          order_reference: b.order_reference || '',
+          source:       b.source || 'walk_in',
           created_at:   b.generated_at,
           total_amount: b.total_amount,
+          cashier_name: b.cashier_name || '',
           order_items:  b.items.map((it, i) => ({
             id:         i,
             item_name:  it.name,
@@ -804,7 +1754,13 @@ export default function CashierDashboard() {
             Walk-in Sale
           </button>
           <button onClick={() => setActiveTab('online')} className={`cd-nav-item${activeTab === 'online' ? ' active' : ''}`}>
-            Online Orders
+            <span>Online Orders</span>
+            {onlineBadge > 0 && (
+              <span className="cd-nav-badge">{onlineBadge > 99 ? '99+' : onlineBadge}</span>
+            )}
+          </button>
+          <button onClick={() => setActiveTab('package-prep')} className={`cd-nav-item${activeTab === 'package-prep' ? ' active' : ''}`}>
+            Meal Package Prep
           </button>
           <button onClick={() => setActiveTab('history')} className={`cd-nav-item${activeTab === 'history' ? ' active' : ''}`}>
             Bill History
@@ -821,13 +1777,17 @@ export default function CashierDashboard() {
         <header className="cd-topbar">
           <div>
             <div className="cd-topbar-title">
-              {activeTab === 'online' ? 'Online Orders' : activeTab === 'history' ? 'Bill History' : 'Walk-in Sale'}
+              {activeTab === 'online' ? 'Online Orders' : activeTab === 'package-prep' ? 'Meal Package Prep' : activeTab === 'history' ? 'Bill History' : 'Walk-in Sale'}
             </div>
             <div className="cd-topbar-date">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </div>
           </div>
           <div className="cd-topbar-right">
+            <span className={`cd-live-pill ${wsStatus}`}>
+              <span className="cd-live-pill-dot" />
+              {wsStatus === 'connected' ? 'Live' : wsStatus === 'reconnecting' ? 'Reconnecting' : 'Connecting'}
+            </span>
             Welcome, <strong>{user?.username}</strong>
           </div>
         </header>
@@ -843,14 +1803,29 @@ export default function CashierDashboard() {
               onClear={() => { setHistoryOrders([]); setHistorySummary(null) }}
             />
           ) : activeTab === 'online' ? (
-            <OnlineOrdersPanel orders={onlineOrders} setOrders={setOnlineOrders} newBadge={onlineBadge} setNewBadge={setOnlineBadge} />
+            <OnlineOrdersPanel
+              orders={onlineOrders}
+              setOrders={setOnlineOrders}
+              newBadge={onlineBadge}
+              setNewBadge={setOnlineBadge}
+              onOrdersSynced={notifyUnseenFromSnapshot}
+            />
+          ) : activeTab === 'package-prep' ? (
+            <MealPackagePrepPanel
+              orders={onlineOrders}
+              setOrders={setOnlineOrders}
+              onOrdersSynced={notifyUnseenFromSnapshot}
+            />
           ) : (
             <WalkinSaleTab onBillCreated={(data) => {
               const normalized = {
                 id:           `bill-${data.id}`,
                 bill_id:      data.bill_number,
+                order_reference: data.order_reference || '',
+                source:       data.source || 'walk_in',
                 created_at:   data.generated_at,
                 total_amount: data.total_amount,
+                cashier_name: data.cashier_name || '',
                 order_items:  data.items.map((it, i) => ({
                   id:         i,
                   item_name:  it.name,
@@ -869,6 +1844,16 @@ export default function CashierDashboard() {
           )}
         </div>
       </div>
+
+      <NewOrderToast
+        toast={activeToast}
+        onOpen={() => {
+          setActiveTab('online')
+          setOnlineBadge(0)
+          setActiveToast(null)
+        }}
+        onClose={() => setActiveToast(null)}
+      />
 
     </div>
   )

@@ -137,7 +137,7 @@ export default function DashboardOverview() {
               <table className="ad-table" style={{ minWidth: '580px' }}>
                 <thead style={{ background: 'var(--lavender-pale)' }}>
                   <tr>
-                    {['Student', 'Package', 'Time', 'Status'].map((h) => (
+                    {['Student', 'Order', 'Time', 'Status'].map((h) => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>

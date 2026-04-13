@@ -1,14 +1,36 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
-from .views import RegisterView, StudentRegisterView, LoginView, LogoutView, ProfileView, GoogleLoginView, StudentListView
+from .views import (
+    RegisterView,
+    StudentRegisterView,
+    StudentRegistrationOTPRequestView,
+    StudentRegistrationOTPVerifyView,
+    LoginView,
+    LogoutView,
+    ProfileView,
+    GoogleLoginView,
+    StudentListView,
+    CashierListCreateView,
+    CashierDetailView,
+    ForgotPasswordView,
+    VerifyResetOTPView,
+    ResetPasswordView,
+    CredentialAwareTokenRefreshView,
+)
 
 urlpatterns = [
     path('register/',         RegisterView.as_view()),
     path('register/student/', StudentRegisterView.as_view()),
+    path('register/student/request-otp/', StudentRegistrationOTPRequestView.as_view()),
+    path('register/student/verify/',      StudentRegistrationOTPVerifyView.as_view()),
     path('login/',            LoginView.as_view()),
     path('logout/',           LogoutView.as_view()),
-    path('refresh/',          TokenRefreshView.as_view()),
+    path('refresh/',          CredentialAwareTokenRefreshView.as_view()),
     path('profile/',          ProfileView.as_view()),
+    path('forgot-password/',  ForgotPasswordView.as_view()),
+    path('verify-reset-otp/', VerifyResetOTPView.as_view()),
+    path('reset-password/',   ResetPasswordView.as_view()),
     path('google/',           GoogleLoginView.as_view()),
     path('users/',            StudentListView.as_view()),
+    path('cashiers/',         CashierListCreateView.as_view()),
+    path('cashiers/<int:pk>/', CashierDetailView.as_view()),
 ]

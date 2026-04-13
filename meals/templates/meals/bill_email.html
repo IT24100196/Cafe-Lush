@@ -1,90 +1,118 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Your Bill — {{ bill.bill_number }}</title>
-  <style>
-    body { margin: 0; padding: 0; background: #f5f0e8; font-family: 'Segoe UI', Arial, sans-serif; color: #2C1A0E; }
-    .wrapper { max-width: 560px; margin: 32px auto; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
-    .header { background: #2C1A0E; padding: 28px 32px; text-align: center; }
-    .header h1 { margin: 0; color: #C9A84C; font-size: 26px; letter-spacing: 1px; }
-    .header p  { margin: 6px 0 0; color: #a08060; font-size: 13px; }
-    .meta { background: #fdf8f0; padding: 16px 32px; display: flex; justify-content: space-between; border-bottom: 1px solid #ede0cc; font-size: 13px; }
-    .meta span { color: #7B4F2E; }
-    .meta strong { color: #2C1A0E; }
-    .body { padding: 24px 32px; }
-    .section-title { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #9B8B7A; text-transform: uppercase; margin-bottom: 12px; }
-    table { width: 100%; border-collapse: collapse; }
-    thead th { font-size: 11px; font-weight: 700; color: #9B8B7A; text-transform: uppercase; padding: 6px 0; border-bottom: 1px solid #ede0cc; text-align: left; }
-    thead th:last-child { text-align: right; }
-    tbody td { padding: 10px 0; font-size: 13px; border-bottom: 1px solid #f5f0e8; vertical-align: top; }
-    tbody td:last-child { text-align: right; font-weight: 600; }
-    .item-name { font-weight: 600; color: #2C1A0E; }
-    .item-sub  { font-size: 11px; color: #9B8B7A; margin-top: 2px; }
-    .total-row { margin-top: 16px; padding-top: 16px; border-top: 2px solid #2C1A0E; display: flex; justify-content: space-between; align-items: center; }
-    .total-label { font-size: 14px; font-weight: 700; color: #2C1A0E; letter-spacing: 0.5px; }
-    .total-val   { font-size: 22px; font-weight: 700; color: #C9A84C; }
-    .footer { background: #fdf8f0; padding: 20px 32px; text-align: center; border-top: 1px solid #ede0cc; }
-    .footer p { margin: 0; font-size: 12px; color: #9B8B7A; }
-    .footer .thanks { font-size: 15px; color: #4A7C45; font-weight: 600; margin-bottom: 6px; }
-  </style>
+  <title>Your Bill - {{ bill.bill_number }}</title>
 </head>
-<body>
-  <div class="wrapper">
-
-    <!-- Header -->
-    <div class="header">
-      <h1>Cafe Lush</h1>
-      <p>Official Bill Receipt</p>
-    </div>
-
-    <!-- Meta row -->
-    <div class="meta">
-      <div><span>Bill No: </span><strong>{{ bill.bill_number }}</strong></div>
-      <div><span>Date: </span><strong>{{ bill.generated_at|date:"N j, Y, g:i a" }}</strong></div>
-    </div>
-
-    <!-- Items table -->
-    <div class="body">
-      <div class="section-title">Order Items</div>
-      <table>
-        <thead>
+<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Segoe UI',Arial,sans-serif;color:#2c1a0e;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;padding:24px 10px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border:1px solid #ede0cc;border-radius:12px;overflow:hidden;">
           <tr>
-            <th>Item</th>
-            <th style="text-align:center">Qty</th>
-            <th style="text-align:right">Unit Price</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for line in bill.items %}
-          <tr>
-            <td>
-              <div class="item-name">{{ line.name }}</div>
+            <td style="background:#2c1a0e;padding:24px 24px 20px;text-align:center;">
+              <img
+                src="cid:{{ logo_cid|default:'bill-logo-cid' }}"
+                alt="Cafe Lush Logo"
+                width="78"
+                height="78"
+                style="display:block;margin:0 auto 12px;border-radius:50%;border:2px solid #c9a84c;object-fit:cover;"
+              />
+              <div style="font-size:28px;line-height:32px;font-weight:700;letter-spacing:0.5px;color:#c9a84c;">Cafe Lush</div>
+              <div style="margin-top:6px;font-size:13px;line-height:18px;color:#a08060;">Official Bill Receipt</div>
             </td>
-            <td style="text-align:center">{{ line.qty }}</td>
-            <td style="text-align:right">Rs.{{ line.unit_price|floatformat:2 }}</td>
-            <td>Rs.{{ line.line_total|floatformat:2 }}</td>
           </tr>
-          {% endfor %}
-        </tbody>
-      </table>
 
-      <!-- Total -->
-      <div class="total-row">
-        <span class="total-label">TOTAL</span>
-        <span class="total-val">Rs.{{ bill.total_amount|floatformat:2 }}</span>
-      </div>
-    </div>
+          <tr>
+            <td style="background:#fdf8f0;border-top:1px solid #ede0cc;border-bottom:1px solid #ede0cc;padding:14px 18px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:2px 4px;">
+                    Bill No (Internal):
+                    <strong style="color:#2c1a0e;">{{ bill.bill_number }}</strong>
+                  </td>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:2px 4px;text-align:right;">
+                    Date:
+                    <strong style="color:#2c1a0e;">{{ bill.generated_at|date:"N j, Y, g:i a" }}</strong>
+                  </td>
+                </tr>
+                {% if bill.order_reference %}
+                <tr>
+                  <td colspan="2" style="font-size:13px;line-height:18px;color:#7b4f2e;padding:2px 4px;">
+                    Order Ref:
+                    <strong style="color:#2c1a0e;">{{ bill.order_reference }}</strong>
+                  </td>
+                </tr>
+                {% endif %}
+              </table>
+            </td>
+          </tr>
 
-    <!-- Footer -->
-    <div class="footer">
-      <p class="thanks">Thank you for dining with us! 🙏</p>
-      <p>This is an automatically generated bill. Please keep it for your records.</p>
-      <p style="margin-top:8px; color:#c4956a;">Cafe Lush — Hotel POS &amp; Management System</p>
-    </div>
+          <tr>
+            <td style="padding:20px 18px 8px;">
+              {% if bill.delivery_type == 'delivery' and bill.delivery_address %}
+              <div style="margin-bottom:16px;padding:12px 14px;border:1px solid #ede0cc;border-radius:10px;background:#fdf8f0;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9b8b7a;margin-bottom:6px;">Deliver To</div>
+                <div style="font-size:14px;line-height:20px;font-weight:600;color:#2c1a0e;word-break:break-word;">{{ bill.delivery_address }}</div>
+                {% if bill.phone_number %}
+                <div style="font-size:13px;line-height:18px;color:#7b4f2e;margin-top:4px;">Phone: {{ bill.phone_number }}</div>
+                {% endif %}
+              </div>
+              {% endif %}
 
-  </div>
+              <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9b8b7a;margin-bottom:10px;">Order Items</div>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;table-layout:fixed;">
+                <thead>
+                  <tr>
+                    <th width="52%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Item</th>
+                    <th width="10%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;white-space:nowrap;">Qty</th>
+                    <th width="19%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;white-space:nowrap;">Unit Price</th>
+                    <th width="19%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;white-space:nowrap;">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for line in bill.items %}
+                  <tr>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;font-size:14px;line-height:20px;font-weight:600;color:#2c1a0e;word-break:break-word;">{{ line.name }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;text-align:center;font-size:14px;line-height:20px;color:#2c1a0e;white-space:nowrap;">{{ line.qty }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;text-align:right;font-size:14px;line-height:20px;color:#2c1a0e;white-space:nowrap;">Rs.{{ line.unit_price|floatformat:2 }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;text-align:right;font-size:14px;line-height:20px;font-weight:600;color:#2c1a0e;white-space:nowrap;">Rs.{{ line.line_total|floatformat:2 }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border-top:2px solid #2c1a0e;">
+                <tr>
+                  <td style="padding:12px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Subtotal</td>
+                  <td style="padding:12px 6px 0;text-align:right;font-size:16px;line-height:20px;font-weight:600;color:#2c1a0e;white-space:nowrap;">Rs.{{ bill.subtotal_amount|floatformat:2 }}</td>
+                </tr>
+                {% if bill.delivery_type == 'delivery' %}
+                <tr>
+                  <td style="padding:8px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Delivery Fee</td>
+                  <td style="padding:8px 6px 0;text-align:right;font-size:16px;line-height:20px;font-weight:600;color:#2c1a0e;white-space:nowrap;">Rs.{{ bill.delivery_fee|floatformat:2 }}</td>
+                </tr>
+                {% endif %}
+                <tr>
+                  <td style="padding:12px 6px 4px;font-size:14px;line-height:20px;font-weight:700;letter-spacing:0.5px;color:#2c1a0e;">TOTAL</td>
+                  <td style="padding:12px 6px 4px;text-align:right;font-size:26px;line-height:30px;font-weight:700;color:#c9a84c;white-space:nowrap;">Rs.{{ bill.total_amount|floatformat:2 }}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#fdf8f0;border-top:1px solid #ede0cc;padding:18px 18px 20px;text-align:center;">
+              <p style="margin:0 0 6px;font-size:16px;line-height:22px;font-weight:600;color:#4a7c45;">Thank you for dining with us!</p>
+              <p style="margin:0;font-size:12px;line-height:18px;color:#9b8b7a;">This is an automatically generated bill. Please keep it for your records.</p>
+              <p style="margin:8px 0 0;font-size:12px;line-height:18px;color:#c4956a;">Cafe Lush - Hotel POS &amp; Management System</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Sun, MoonStar } from 'lucide-react'
 import { getWeeklyMealPlan, updateMealSlot, getItems } from '../../api/endpoints'
 import { Spinner, PageHeader, Modal } from '../../components/UI'
+import { isPositiveNumber } from '../../api/validation'
 
 const DAYS = [
   { key: 0, short: 'Mon', full: 'Monday',    special: false },
@@ -98,11 +99,13 @@ export default function MealPackages() {
     if (!editingSlot?.id) { setError('Slot not loaded yet. Please refresh and try again.'); return }
     const filtered = editDishes.filter(d => d.trim() !== '')
     if (filtered.length < 1) { setError('At least one dish is required.'); return }
+    const numericPrice = Number(editPrice)
+    if (!isPositiveNumber(numericPrice)) { setError('Price must be greater than 0.'); return }
     setSaving(true)
     setError('')
     setSuccess('')
     try {
-      await updateMealSlot(editingSlot.id, { dishes: filtered, price: editPrice })
+      await updateMealSlot(editingSlot.id, { dishes: filtered, price: numericPrice })
       setSuccess('Slot updated successfully')
       await fetchPlan()
       setTimeout(() => setEditingSlot(null), 1200)
@@ -347,8 +350,10 @@ export default function MealPackages() {
               <input
                 className="ad-input"
                 type="number"
+                min="0.01"
+                step="0.01"
                 value={editPrice}
-                onChange={e => setEditPrice(Number(e.target.value))}
+                onChange={e => setEditPrice(e.target.value)}
               />
             </div>
 

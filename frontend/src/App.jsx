@@ -12,12 +12,14 @@ import DashboardOverview  from './pages/admin/DashboardOverview'
 import ItemsManagement    from './pages/admin/ItemsManagement'
 import MealPackages     from './pages/admin/MealPackages'
 import StudentOrders    from './pages/admin/StudentOrders'
+import WalkInOrders     from './pages/admin/WalkInOrders'
 import EventsManagement from './pages/admin/EventsManagement'
 import IncomeOutcome    from './pages/admin/IncomeOutcome'
 import MonthlyReport    from './pages/admin/MonthlyReport'
 import PublicPreview    from './pages/admin/PublicPreview'
 import Suggestions      from './pages/admin/Suggestions'
 import UserManagement   from './pages/admin/UserManagement'
+import CashierManagement from './pages/admin/CashierManagement'
 
 export default function App() {
   return (
@@ -62,12 +64,14 @@ export default function App() {
             <Route path="items"         element={<ItemsManagement />} />
             <Route path="meal-packages" element={<MealPackages />} />
             <Route path="student-orders"element={<StudentOrders />} />
+            <Route path="walk-in-orders" element={<WalkInOrders />} />
             <Route path="events"        element={<EventsManagement />} />
             <Route path="income-outcome" element={<IncomeOutcome />} />
             <Route path="reports"        element={<MonthlyReport />} />
             <Route path="public-preview" element={<PublicPreview />} />
             <Route path="suggestions"    element={<Suggestions />} />
             <Route path="users"           element={<UserManagement />} />
+            <Route path="cashiers"        element={<CashierManagement />} />
           </Route>
 
           {/* Fallback */}

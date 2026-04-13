@@ -13,6 +13,36 @@ from partners.models import Branch, PartnerTransaction
 from .models import Payment, IncomeOutcome
 
 
+def _order_label(order):
+    if order.order_type == 'item':
+        return order.item.name if order.item else 'Item'
+
+    meal = order.meal_type.name if order.meal_type else 'Package'
+    if order.preference == 'veg':
+        return f'Veg {meal}'
+    if order.preference == 'non-veg':
+        return f'Non-Veg {meal}'
+    return meal
+
+
+def _session_label(orders):
+    labels = []
+    seen = set()
+    for order in orders:
+        label = _order_label(order).strip()
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+
+    if not labels:
+        return 'Order'
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return ' + '.join(labels)
+    return f'{labels[0]} + {len(labels) - 1} more'
+
+
 class IncomeOutcomeListView(APIView):
     permission_classes = [IsAdmin]
 
@@ -164,20 +194,36 @@ class AdminOverviewView(APIView):
         active_events = Event.objects.filter(status__in=['inquiry', 'confirmed']).count()
         partner_count = Branch.objects.filter(is_partner=True).count()
 
-        recent_qs = MealOrder.objects.select_related('student', 'meal_type', 'item').order_by('-created_at')[:5]
+        recent_qs = (
+            MealOrder.objects
+            .select_related('student', 'meal_type', 'item')
+            .order_by('-created_at')
+        )
+        recent_sessions = []
+        grouped_orders = {}
+
+        for order in recent_qs:
+            group_key = order.session_id or f'order-{order.id}'
+            if group_key not in grouped_orders:
+                if len(grouped_orders) >= 5:
+                    continue
+                grouped_orders[group_key] = []
+                recent_sessions.append(group_key)
+            grouped_orders[group_key].append(order)
+            if len(grouped_orders) >= 5 and len(recent_sessions) >= 5:
+                # Keep collecting rows only for the already-selected latest groups.
+                continue
+
         recent_orders = []
-        for o in recent_qs:
-            label = ''
-            if o.order_type == 'item' and o.item:
-                label = o.item.name
-            elif o.meal_type:
-                label = o.meal_type.name
+        for group_key in recent_sessions:
+            orders = grouped_orders[group_key]
+            first = orders[0]
             recent_orders.append({
-                'id':           o.id,
-                'student_name': o.student.full_name if o.student else '',
-                'package':      label,
-                'time':         o.created_at.strftime('%I:%M %p'),
-                'status':       o.status,
+                'id':           group_key,
+                'student_name': first.student.full_name if first.student else (first.student_email or 'Student'),
+                'package':      _session_label(orders),
+                'time':         timezone.localtime(first.created_at).strftime('%I:%M %p'),
+                'status':       first.status,
             })
 
         upcoming_qs = Event.objects.filter(
