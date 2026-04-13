@@ -5,11 +5,11 @@ from django.core.validators import validate_email
 
 
 GENERIC_EMAIL_REGEX = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
-SL_MOBILE_REGEX = re.compile(r'^(?:\+94|0)7\d{8}$')
+SL_MOBILE_REGEX = re.compile(r'^07\d{8}$')
 
 
 def _normalize_phone(value):
-    return re.sub(r'[\s-]+', '', value or '')
+    return (value or '').strip()
 
 
 def validate_generic_email_format(value, *, required=False):
@@ -40,6 +40,6 @@ def validate_sri_lankan_mobile(value, *, required=False, label='Phone number'):
     normalized = _normalize_phone(phone)
     if not SL_MOBILE_REGEX.fullmatch(normalized):
         raise DjangoValidationError(
-            f'{label} must be a valid Sri Lankan mobile number (example: 0771234567 or +94771234567).'
+            f'{label} must contain exactly 10 numbers and start with 07 (example: 0771234567).'
         )
     return normalized

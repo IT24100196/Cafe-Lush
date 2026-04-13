@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getEvents, createEvent, updateEvent, updateEventStatus, getBranches } from '../../api/endpoints'
 import { Spinner, Badge, Modal, EmptyState, PageHeader } from '../../components/UI'
+import { isValidSriLankanMobile, normalizePhone } from '../../api/validation'
 
 const STATUSES  = ['inquiry', 'confirmed', 'completed', 'cancelled']
 const EMPTY_FORM = {
@@ -43,7 +44,17 @@ export default function EventsManagement() {
 
   const handleSave = async (e) => {
     e.preventDefault(); setSaving(true); setError('')
-    const payload = { ...form, assigned_branch: form.assigned_branch || null }
+    const customerContact = form.customer_contact.trim()
+    if (customerContact && !isValidSriLankanMobile(customerContact)) {
+      setSaving(false)
+      setError('Customer contact must contain exactly 10 numbers and start with 07 (example: 0771234567).')
+      return
+    }
+    const payload = {
+      ...form,
+      customer_contact: customerContact ? normalizePhone(customerContact) : '',
+      assigned_branch: form.assigned_branch || null,
+    }
     try {
       if (editId) await updateEvent(editId, payload)
       else        await createEvent(payload)
@@ -132,7 +143,15 @@ export default function EventsManagement() {
               </div>
               <div>
                 <label className="ad-field-label">Customer Contact</label>
-                <input className="ad-input" value={form.customer_contact} onChange={(e) => setForm({ ...form, customer_contact: e.target.value })} />
+                <input
+                  className="ad-input"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  pattern="[0-9]*"
+                  value={form.customer_contact}
+                  onChange={(e) => setForm({ ...form, customer_contact: normalizePhone(e.target.value) })}
+                />
               </div>
               <div>
                 <label className="ad-field-label">Event Date</label>

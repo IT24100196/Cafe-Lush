@@ -137,7 +137,7 @@ function FeaturePill({ children }) {
   )
 }
 
-function InputField({ label, icon, type = 'text', placeholder, value, onChange, required, autoFocus, rightElement, minLength, compact }) {
+function InputField({ label, icon, type = 'text', placeholder, value, onChange, required, autoFocus, rightElement, minLength, compact, inputMode, maxLength, pattern }) {
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ marginBottom: compact ? '8px' : '1rem' }}>
@@ -166,6 +166,7 @@ function InputField({ label, icon, type = 'text', placeholder, value, onChange, 
         <input
           type={type} placeholder={placeholder} value={value} onChange={onChange}
           required={required} autoFocus={autoFocus} minLength={minLength}
+          inputMode={inputMode} maxLength={maxLength} pattern={pattern}
           onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           style={{
             width: '100%', padding: compact ? '9px 36px 9px 38px' : '15px 48px 15px 44px',
@@ -300,7 +301,7 @@ export default function LoginPage() {
       return
     }
     if (contact && !isValidSriLankanMobile(contact)) {
-      setRegError('Enter a valid Sri Lankan mobile number (example: 0771234567 or +94771234567).')
+      setRegError('Enter a valid Sri Lankan mobile number with exactly 10 digits (example: 0771234567).')
       return
     }
     if (regForm.password !== regForm.confirm_password) {
@@ -838,7 +839,9 @@ export default function LoginPage() {
                       <InputField compact label="Username" icon={<IconUser />} placeholder="Choose a username"
                         value={regForm.username} onChange={(e) => setRegForm({ ...regForm, username: e.target.value })} required />
                       <InputField compact label="Contact" icon={<IconPhone />} placeholder="07xxxxxxxx"
-                        value={regForm.contact} onChange={(e) => setRegForm({ ...regForm, contact: e.target.value })} />
+                        value={regForm.contact}
+                        onChange={(e) => setRegForm({ ...regForm, contact: normalizePhone(e.target.value) })}
+                        inputMode="numeric" maxLength={10} pattern="[0-9]*" />
                       <div style={{ gridColumn: '1 / -1' }}>
                         <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Enter email address"
                           value={regForm.email} onChange={(e) => setRegForm({ ...regForm, email: e.target.value })} required />

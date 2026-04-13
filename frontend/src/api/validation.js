@@ -1,8 +1,8 @@
 export const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
-export const SL_MOBILE_REGEX = /^(?:\+94|0)7\d{8}$/
+export const SL_MOBILE_REGEX = /^07\d{8}$/
 
 export function normalizePhone(value = '') {
-  return String(value).trim().replace(/[\s-]+/g, '')
+  return String(value).replace(/\D/g, '').slice(0, 10)
 }
 
 export function isValidEmail(value = '') {
@@ -12,7 +12,7 @@ export function isValidEmail(value = '') {
 }
 
 export function isValidSriLankanMobile(value = '') {
-  const phone = normalizePhone(value)
+  const phone = String(value).trim()
   if (!phone) return false
   return SL_MOBILE_REGEX.test(phone)
 }

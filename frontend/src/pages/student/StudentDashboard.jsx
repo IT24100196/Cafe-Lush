@@ -489,13 +489,16 @@ function DeliveryModal({
             <input
               className="sd-input"
               type="tel"
-              placeholder="+94 77 123 4567"
+              placeholder="0771234567"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => setPhone(normalizePhone(e.target.value))}
+              inputMode="numeric"
+              maxLength={10}
+              pattern="[0-9]*"
             />
             {phone.trim() && !isPhoneValid && (
               <p className="sd-field-error">
-                Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).
+                Enter a valid Sri Lankan mobile number with exactly 10 digits (example: 0771234567).
               </p>
             )}
           </div>
@@ -707,13 +710,16 @@ function TakeawayModal({
           <input
             className="sd-input"
             type="tel"
-            placeholder="+94 77 123 4567"
+            placeholder="0771234567"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => setPhone(normalizePhone(e.target.value))}
+            inputMode="numeric"
+            maxLength={10}
+            pattern="[0-9]*"
           />
           {phone.trim() && !isPhoneValid && (
             <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>
-              Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).
+              Enter a valid Sri Lankan mobile number with exactly 10 digits (example: 0771234567).
             </p>
           )}
         </div>
@@ -3012,7 +3018,7 @@ function ProfileModal({ user, onClose, onSaved }) {
       return
     }
     if (contact && !isValidSriLankanMobile(contact)) {
-      setError('Enter a valid Sri Lankan mobile number (0771234567 or +94771234567).')
+      setError('Enter a valid Sri Lankan mobile number with exactly 10 digits (example: 0771234567).')
       return
     }
 
@@ -3072,8 +3078,11 @@ function ProfileModal({ user, onClose, onSaved }) {
                     className="sd-input"
                     type={type}
                     value={form[field]}
-                    onChange={(e) => setForm({ ...form, [field]: e.target.value })}
+                    onChange={(e) => setForm({ ...form, [field]: field === 'contact' ? normalizePhone(e.target.value) : e.target.value })}
                     placeholder={`Enter ${label.toLowerCase()}...`}
+                    inputMode={field === 'contact' ? 'numeric' : undefined}
+                    maxLength={field === 'contact' ? 10 : undefined}
+                    pattern={field === 'contact' ? '[0-9]*' : undefined}
                   />
                 </div>
               ))}

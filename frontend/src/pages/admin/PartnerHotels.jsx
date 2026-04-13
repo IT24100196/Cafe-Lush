@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getBranches, createBranch, updateBranch, deleteBranch, getTransactions } from '../../api/endpoints'
 import { Spinner, Badge, Modal, ConfirmDialog, EmptyState, PageHeader } from '../../components/UI'
+import { isValidSriLankanMobile, normalizePhone } from '../../api/validation'
 
 const EMPTY = { name: '', address: '', contact: '', is_partner: false, commission_rate: '0' }
 
@@ -34,9 +35,16 @@ export default function PartnerHotels() {
 
   const handleSave = async (e) => {
     e.preventDefault(); setSaving(true); setError('')
+    const contact = form.contact.trim()
+    if (contact && !isValidSriLankanMobile(contact)) {
+      setSaving(false)
+      setError('Contact number must contain exactly 10 numbers and start with 07 (example: 0771234567).')
+      return
+    }
+    const payload = { ...form, contact: contact ? normalizePhone(contact) : '' }
     try {
-      if (editId) await updateBranch(editId, form)
-      else        await createBranch(form)
+      if (editId) await updateBranch(editId, payload)
+      else        await createBranch(payload)
       setModal(false); fetchAll()
     } catch (err) {
       setError(err.response?.data?.detail || JSON.stringify(err.response?.data) || 'Save failed.')
@@ -170,7 +178,15 @@ export default function PartnerHotels() {
             </div>
             <div>
               <label className="ad-field-label">Contact</label>
-              <input className="ad-input" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} />
+              <input
+                className="ad-input"
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                pattern="[0-9]*"
+                value={form.contact}
+                onChange={(e) => setForm({ ...form, contact: normalizePhone(e.target.value) })}
+              />
             </div>
             <div className="flex items-center gap-2">
               <input
