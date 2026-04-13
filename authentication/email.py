@@ -6,8 +6,16 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import send_mail
 
 
+def _clean_setting(value):
+    return str(value or '').strip().strip('"').strip("'")
+
+
 def send_transactional_email(subject, message, recipient_list):
-    if getattr(settings, 'EMAIL_PROVIDER', '').lower() != 'resend':
+    provider = _clean_setting(getattr(settings, 'EMAIL_PROVIDER', ''))
+    if not provider and _clean_setting(getattr(settings, 'RESEND_API_KEY', '')):
+        provider = 'resend'
+
+    if provider.lower() != 'resend':
         return send_mail(
             subject=subject,
             message=message,
@@ -16,7 +24,7 @@ def send_transactional_email(subject, message, recipient_list):
             fail_silently=False,
         )
 
-    api_key = getattr(settings, 'RESEND_API_KEY', '')
+    api_key = _clean_setting(getattr(settings, 'RESEND_API_KEY', ''))
     if not api_key:
         raise ImproperlyConfigured('RESEND_API_KEY is required when EMAIL_PROVIDER=resend.')
 
