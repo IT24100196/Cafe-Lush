@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getBillPrint, sendBillEmail } from '../../api/endpoints'
+import { isValidEmail } from '../../api/validation'
 import { Spinner } from '../../components/UI'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 import { finalizeThermalPrint } from './thermalPrint'
 import { KITCHEN_RECEIPT_CSS, buildKitchenReceiptHtml } from './printReceiptHelpers'
 import './PrintBillView.css'
 
 const ONLINE_BILL_LOGO_SRC = '/image/image6.jpeg'
 
-export default function PrintBillView({ billId, anchorRect, onClose }) {
+export default function PrintBillView({ billId, onClose }) {
+  useBodyScrollLock()
+
   const [bill,       setBill]       = useState(null)
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState('')
   const [sending,    setSending]    = useState(false)
   const [emailSent,   setEmailSent]  = useState(false)
   const [emailMsg,    setEmailMsg]   = useState('')
-  const [modalTop,    setModalTop]   = useState(null)
-  const modalRef = useRef(null)
 
   useEffect(() => {
     getBillPrint(billId)
@@ -24,41 +27,23 @@ export default function PrintBillView({ billId, anchorRect, onClose }) {
       .finally(() => setLoading(false))
   }, [billId])
 
-  const repositionModal = useCallback(() => {
-    if (!anchorRect || !modalRef.current) {
-      setModalTop(null)
-      return
-    }
-
-    const viewportH = window.innerHeight
-    const modalH = modalRef.current.offsetHeight || 0
-    const minTop = 20
-    const maxTop = Math.max(minTop, viewportH - modalH - 20)
-    const anchorCenterY = anchorRect.top + ((anchorRect.height || 0) / 2)
-    const desiredTop = anchorCenterY - (modalH / 2)
-    const clamped = Math.min(maxTop, Math.max(minTop, desiredTop))
-    setModalTop(clamped)
-  }, [anchorRect])
-
-  useLayoutEffect(() => {
-    if (!loading) repositionModal()
-  }, [loading, bill, error, repositionModal])
-
-  useEffect(() => {
-    if (!anchorRect) return undefined
-    const onResize = () => repositionModal()
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [anchorRect, repositionModal])
-
   const handleSendEmail = async () => {
     if (!bill) return
+    const email = (bill.student_email || '').trim()
+    if (!email) {
+      setEmailMsg('No email address provided.')
+      return
+    }
+    if (!isValidEmail(email)) {
+      setEmailMsg('Invalid email address. Example: user@example.com')
+      return
+    }
     setSending(true)
     setEmailMsg('')
     try {
-      await sendBillEmail(billId, bill.student_email)
+      await sendBillEmail(billId, email)
       setEmailSent(true)
-      setEmailMsg(`✅ Sent to ${bill.student_email}`)
+      setEmailMsg(`✅ Sent to ${email}`)
     } catch (err) {
       setEmailMsg(`❌ ${err.response?.data?.detail || 'Failed to send email.'}`)
     } finally { setSending(false) }
@@ -247,19 +232,9 @@ export default function PrintBillView({ billId, anchorRect, onClose }) {
     void finalizeThermalPrint(win, { selector: '.print-stack', minHeightMm: 90 })
   }
 
-  return (
+  return createPortal(
     <div className="pbv-overlay">
-      <div
-        ref={modalRef}
-        className="pbv-modal"
-        style={anchorRect ? {
-          position: 'fixed',
-          left: '50%',
-          top: modalTop == null ? 20 : modalTop,
-          transform: 'translateX(-50%)',
-          margin: 0,
-        } : undefined}
-      >
+      <div className="pbv-modal">
 
         {loading ? (
           <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}>
@@ -394,6 +369,7 @@ export default function PrintBillView({ billId, anchorRect, onClose }) {
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

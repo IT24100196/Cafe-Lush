@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Bell,
@@ -13,6 +13,7 @@ import {
   Instagram,
   LogOut,
   Mail,
+  Menu as MenuIcon,
   MapPin,
   MapPinned,
   MessageCircle,
@@ -34,15 +35,17 @@ import {
   CheckCircle2,
   TrendingUp,
 } from 'lucide-react'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth } from '../../context/authContextCore'
 import {
-  getMealTypes, getMealOrders, placeMealOrdersBatch, estimateDeliveryFee,
-  getNotifications, markNotificationsRead, getStudentItems,
+  getMealTypes, getMealOrders, placeMealOrdersBatch, getDeliveryAreas, estimateDeliveryFee,
+  getNotifications, markAllNotificationsRead, markNotificationRead,
+  deleteNotification, deleteAllNotifications, deleteSelectedNotifications, getStudentItems,
   getWeeklyMealPlan, submitSuggestion, updateProfile, clearOrderHistory, cancelStudentOrder,
 } from '../../api/endpoints'
-import { isValidEmail, isValidSriLankanMobile, normalizePhone } from '../../api/validation'
-import { Spinner, Badge, EmptyState, Toast } from '../../components/UI'
+import { EMAIL_MAX_LENGTH, FULL_NAME_MAX_LENGTH, isValidEmail, isValidFullName, isValidSriLankanMobile, normalizePhone } from '../../api/validation'
+import { Spinner, Badge, EmptyState, Toast, ConfirmDialog } from '../../components/UI'
 import { useApi } from '../../hooks/useApi'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 import { useCountdown } from '../../hooks/useCountdown'
 import './StudentDashboard.css'
 
@@ -76,7 +79,7 @@ function FieldLabel({ children }) {
   )
 }
 
-// â”€â”€ Delivery helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Delivery helpers ──────────────────────────────────────────────────────────
 const ADDRESS_CORRECTIONS = {
   'jaffna uni': 'University of Jaffna',
   'jaffna university': 'University of Jaffna',
@@ -113,6 +116,14 @@ function formatDeliveryAddress({ addressLine1 = '', addressLine2 = '', cityArea 
     .join(', ')
 }
 
+function normalizeAreaSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function getPackageReadyTime(mealTypeName) {
   const normalized = String(mealTypeName || '').trim().toLowerCase()
   if (normalized === 'breakfast') return '7:30 AM'
@@ -128,6 +139,18 @@ function getPackageReadyText(mealTypeName) {
 }
 
 const MENU_ITEM_ORDER_HOURS_MESSAGE = 'Menu item orders are available from 4:00 AM to 11:30 PM.'
+const SHOP_CLOSED_DIALOG_MESSAGE = 'Cafe Lush is closed for menu item orders right now. Orders are available from 4:00 AM to 11:30 PM. Please come back during opening hours.'
+const MAX_PACKAGE_QUANTITY = 10
+
+function sanitizePackageQuantityInput(value, previousValue = '') {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (!digits) return ''
+
+  const normalized = String(Number(digits))
+  if (normalized === '0') return ''
+  if (Number(normalized) > MAX_PACKAGE_QUANTITY) return previousValue
+  return normalized
+}
 
 function isMenuItemOrderOpen(date = new Date()) {
   const minutes = date.getHours() * 60 + date.getMinutes()
@@ -183,6 +206,8 @@ function getPackageCancelInfo(packageOrder, isCombined = false) {
 }
 
 function OrderMethodModal({ onSelect, onCancel }) {
+  useBodyScrollLock()
+
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
       <div className="sd-modal" onClick={(e) => e.stopPropagation()}>
@@ -226,7 +251,7 @@ function OrderMethodModal({ onSelect, onCancel }) {
   )
 }
 
-// â”€â”€ Delivery Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Delivery Modal ────────────────────────────────────────────────────────────
 function DeliveryModal({
   onConfirm,
   onCancel,
@@ -243,11 +268,18 @@ function DeliveryModal({
   noticeText = 'Include your building, room or flat number, street, and area so our delivery team can find you easily.',
   deliveryIncludedText = '',
 }) {
+  useBodyScrollLock()
+
   const [addressLine1, setAddressLine1] = useState('')
   const [addressLine2, setAddressLine2] = useState('')
-  const [cityArea, setCityArea] = useState('')
+  const [areaQuery, setAreaQuery] = useState('')
+  const [selectedArea, setSelectedArea] = useState(null)
+  const [areaMenuOpen, setAreaMenuOpen] = useState(false)
+  const [deliveryAreas, setDeliveryAreas] = useState([])
+  const [areasState, setAreasState] = useState('loading')
+  const [areasError, setAreasError] = useState('')
   const [phone, setPhone] = useState('')
-  const [qty, setQty] = useState(1)
+  const [qty, setQty] = useState('1')
   const [feeState, setFeeState] = useState('idle') // idle | loading | ready | error
   const [feeInfo, setFeeInfo] = useState(null)
   const [feeError, setFeeError] = useState('')
@@ -256,11 +288,13 @@ function DeliveryModal({
   const [locationRequested, setLocationRequested] = useState(false)
 
   const normalizedPhone = normalizePhone(phone)
-  const isQtyValid = Number.isInteger(Number(qty)) && Number(qty) > 0
+  const packageQty = Number(qty)
+  const isQtyValid = Number.isInteger(packageQty) && packageQty >= 1 && packageQty <= MAX_PACKAGE_QUANTITY
   const isPhoneValid = isValidSriLankanMobile(phone)
   const cleanAddressLine1 = normalizeDeliveryAddressPart(addressLine1)
   const cleanAddressLine2 = normalizeDeliveryAddressPart(addressLine2)
-  const cleanCityArea = normalizeDeliveryAddressPart(cityArea)
+  const cleanCityArea = selectedArea?.name || ''
+  const cleanAreaQuery = normalizeDeliveryAddressPart(areaQuery)
   const hasRequiredAddress = Boolean(cleanAddressLine1) && Boolean(cleanCityArea)
   const fullAddress = formatDeliveryAddress({
     addressLine1: cleanAddressLine1,
@@ -280,6 +314,55 @@ function DeliveryModal({
     setFeeError('')
   }
 
+  useEffect(() => {
+    let active = true
+    setAreasState('loading')
+    setAreasError('')
+    getDeliveryAreas()
+      .then(({ data }) => {
+        if (!active) return
+        setDeliveryAreas(Array.isArray(data?.areas) ? data.areas : [])
+        setAreasState('ready')
+      })
+      .catch(() => {
+        if (!active) return
+        setDeliveryAreas([])
+        setAreasState('error')
+        setAreasError('Could not load delivery areas. Please try again.')
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const filteredAreas = useMemo(() => {
+    const query = normalizeAreaSearchText(cleanAreaQuery)
+    if (!query) return []
+    const matches = query
+      ? deliveryAreas.filter((area) => {
+          const searchable = [area.name, ...(Array.isArray(area.aliases) ? area.aliases : [])]
+            .map(normalizeAreaSearchText)
+            .join(' ')
+          return searchable.includes(query)
+        })
+      : []
+    return matches.slice(0, 12)
+  }, [cleanAreaQuery, deliveryAreas])
+
+  const selectDeliveryArea = (area) => {
+    setSelectedArea(area)
+    setAreaQuery(area.name)
+    setAreaMenuOpen(false)
+    resetEstimate()
+  }
+
+  const handleAreaQueryChange = (value) => {
+    setAreaQuery(value)
+    setAreaMenuOpen(true)
+    setSelectedArea(null)
+    resetEstimate()
+  }
+
   const handleLocationSourceChange = (source) => {
     setLocationSource(source)
     setFeeState('idle')
@@ -293,7 +376,7 @@ function DeliveryModal({
     }
   }
 
-  const fetchDeliveryFee = async (source, nextCoords = coords) => {
+  const fetchDeliveryFee = useCallback(async (source, nextCoords = coords) => {
     if (!canEstimate) return
     setFeeState('loading')
     setFeeError('')
@@ -321,9 +404,9 @@ function DeliveryModal({
       setFeeState('error')
       setFeeError(err.response?.data?.detail || err.message || 'Failed to calculate the delivery fee.')
     }
-  }
+  }, [canEstimate, cleanAddressLine1, cleanAddressLine2, cleanCityArea, coords, hasPackage])
 
-  const handleUseCurrentLocation = () => {
+  const handleUseCurrentLocation = useCallback(() => {
     setLocationRequested(true)
     if (!navigator.geolocation) {
       setFeeState('error')
@@ -346,7 +429,7 @@ function DeliveryModal({
         setFeeError('Could not get your location. Please allow location access and try again.')
       }
     )
-  }
+  }, [fetchDeliveryFee])
 
   useEffect(() => {
     if (!requireFeeEstimate || !autoEstimateFee) return
@@ -364,7 +447,7 @@ function DeliveryModal({
       if (coords.lat != null && coords.lng != null) {
         if (feeState !== 'idle') return
         const timer = setTimeout(() => {
-          void fetchDeliveryFee('current_location', coords)
+          void fetchDeliveryFee('current_location', { lat: coords.lat, lng: coords.lng })
         }, 400)
         return () => clearTimeout(timer)
       }
@@ -386,12 +469,14 @@ function DeliveryModal({
     hasRequiredAddress,
     addressLine1,
     addressLine2,
-    cityArea,
+    selectedArea,
     locationSource,
     locationRequested,
     coords.lat,
     coords.lng,
     feeState,
+    fetchDeliveryFee,
+    handleUseCurrentLocation,
   ])
 
   const selectedSourceLabel = locationSource === 'current_location' ? 'current location' : 'typed address'
@@ -424,14 +509,18 @@ function DeliveryModal({
               <label className="sd-field-label">{quantityLabel}</label>
               <input
                 className="sd-input sd-quantity-input"
-                type="number"
-                min={1}
-                step={1}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={qty}
-                onChange={(e) => setQty(Number(e.target.value) || 0)}
+                onChange={(e) => setQty((current) => sanitizePackageQuantityInput(e.target.value, current))}
+                onBlur={() => {
+                  if (!isQtyValid) setQty('1')
+                }}
               />
+              <p className="sd-field-hint">Maximum {MAX_PACKAGE_QUANTITY} packages per order.</p>
               {!isQtyValid && (
-                <p className="sd-field-error">Quantity must be greater than 0.</p>
+                <p className="sd-field-error">Quantity must be between 1 and {MAX_PACKAGE_QUANTITY}.</p>
               )}
             </div>
           )}
@@ -468,18 +557,56 @@ function DeliveryModal({
 
           <div>
             <label className="sd-field-label">
-              City / Area <span style={{ color: '#E24B4A' }}>*</span>
+              Delivery Area <span style={{ color: '#E24B4A' }}>*</span>
             </label>
-            <input
-              className="sd-input"
-              type="text"
-              placeholder="Example: Thirunelveli, Jaffna"
-              value={cityArea}
-              onChange={(e) => {
-                setCityArea(e.target.value)
-                resetEstimate()
-              }}
-            />
+            <div className="sd-area-combobox">
+              <input
+                className="sd-input"
+                type="text"
+                placeholder={areasState === 'loading' ? 'Loading delivery areas...' : 'Example: Kokuvil'}
+                value={areaQuery}
+                disabled={areasState === 'loading'}
+                onFocus={() => setAreaMenuOpen(true)}
+                onBlur={() => setTimeout(() => setAreaMenuOpen(false), 120)}
+                onChange={(e) => handleAreaQueryChange(e.target.value)}
+                autoComplete="off"
+              />
+              {selectedArea && (
+                <button
+                  type="button"
+                  className="sd-area-clear"
+                  aria-label="Clear delivery area"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleAreaQueryChange('')}
+                >
+                  <X size={14} strokeWidth={2.2} />
+                </button>
+              )}
+              {areaMenuOpen && areasState === 'ready' && Boolean(cleanAreaQuery) && !selectedArea && (
+                <div className="sd-area-options">
+                  {filteredAreas.length > 0 ? filteredAreas.map((area) => (
+                    <button
+                      key={area.id}
+                      type="button"
+                      className="sd-area-option"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectDeliveryArea(area)}
+                    >
+                      <span>{area.name}</span>
+                    </button>
+                  )) : (
+                    <div className="sd-area-empty">No allowed delivery area found.</div>
+                  )}
+                </div>
+              )}
+            </div>
+            {areasError && <p className="sd-field-error">{areasError}</p>}
+            {!selectedArea && areasState === 'ready' && (
+              <p className="sd-field-hint">Start typing and choose one of the allowed delivery areas.</p>
+            )}
+            {selectedArea && (
+              <p className="sd-field-hint">Selected: {selectedArea.name}</p>
+            )}
           </div>
 
           <div>
@@ -548,7 +675,7 @@ function DeliveryModal({
                     type="button"
                     className="sd-btn-secondary sd-delivery-fee-btn"
                     disabled={!canEstimate || feeState === 'loading'}
-                    title={!canEstimate ? 'Fill address line 1 and city / area first' : ''}
+                    title={!canEstimate ? 'Fill address line 1 and delivery area first' : ''}
                     onClick={() => void fetchDeliveryFee('address')}
                   >
                     <Truck size={15} strokeWidth={2.2} />
@@ -559,7 +686,7 @@ function DeliveryModal({
                       type="button"
                       className="sd-btn-secondary sd-delivery-fee-btn"
                       disabled={!canEstimate || feeState === 'loading'}
-                      title={!canEstimate ? 'Fill address line 1 and city / area first' : ''}
+                      title={!canEstimate ? 'Fill address line 1 and delivery area first' : ''}
                       onClick={() => {
                         handleLocationSourceChange('current_location')
                         if (canEstimate) handleUseCurrentLocation()
@@ -574,7 +701,7 @@ function DeliveryModal({
 
               {!canEstimate && (
                 <p className="sd-field-hint">
-                  Fill address line 1 and city / area to calculate the delivery fee.
+                  Fill address line 1 and delivery area to calculate the delivery fee.
                 </p>
               )}
 
@@ -590,20 +717,11 @@ function DeliveryModal({
 
               {feeState === 'ready' && feeInfo && (
                 <div className="sd-delivery-fee-result">
-                  {feeInfo.distance_km != null && (
-                    <div className="sd-delivery-fee-row">
-                      <span>Distance</span>
-                      <strong>{Number(feeInfo.distance_km).toFixed(2)} km</strong>
-                    </div>
-                  )}
                   <div className="sd-delivery-fee-row">
                     <span>Delivery Charge</span>
                     <strong className="sd-delivery-fee-total">
                       {feeInfo.delivery_fee_label}
                     </strong>
-                  </div>
-                  <div className="sd-field-hint">
-                    Calculated using {feeInfo.location_source === 'current_location' ? 'your current location' : 'the typed address'}.
                   </div>
                 </div>
               )}
@@ -613,7 +731,7 @@ function DeliveryModal({
                   {autoEstimateFee
                     ? locationSource === 'current_location'
                       ? 'We will use your device location for distance. The typed address is still needed for the delivery team.'
-                      : 'Delivery fee will calculate automatically after you enter address line 1 and city / area.'
+                      : 'Delivery fee will calculate automatically after you enter address line 1 and delivery area.'
                     : validationHint}
                 </p>
               )}
@@ -642,7 +760,7 @@ function DeliveryModal({
                 payload.delivery_latitude = coords.lat
                 payload.delivery_longitude = coords.lng
               }
-              if (showQuantity) payload.quantity = qty
+              if (showQuantity) payload.quantity = packageQty
               onConfirm(payload)
             }}
           >
@@ -666,12 +784,15 @@ function TakeawayModal({
   notePlaceholder = 'Example: Pickup person name - Nimal, contact - 0771234567',
   confirmLabel = 'Continue',
 }) {
-  const [qty, setQty] = useState(1)
+  useBodyScrollLock()
+
+  const [qty, setQty] = useState('1')
   const [phone, setPhone] = useState('')
   const [pickupNote, setPickupNote] = useState('')
 
   const normalizedPhone = normalizePhone(phone)
-  const isQtyValid = Number.isInteger(Number(qty)) && Number(qty) > 0
+  const packageQty = Number(qty)
+  const isQtyValid = Number.isInteger(packageQty) && packageQty >= 1 && packageQty <= MAX_PACKAGE_QUANTITY
   const isPhoneValid = isValidSriLankanMobile(phone)
   const canConfirm = (!showQuantity || isQtyValid) && isPhoneValid
 
@@ -691,14 +812,18 @@ function TakeawayModal({
             <input
               className="sd-input"
               style={{ width: '120px' }}
-              type="number"
-              min={1}
-              step={1}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
               value={qty}
-              onChange={(e) => setQty(Number(e.target.value) || 0)}
+              onChange={(e) => setQty((current) => sanitizePackageQuantityInput(e.target.value, current))}
+              onBlur={() => {
+                if (!isQtyValid) setQty('1')
+              }}
             />
+            <p className="sd-field-hint">Maximum {MAX_PACKAGE_QUANTITY} packages per order.</p>
             {!isQtyValid && (
-              <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>Quantity must be greater than 0.</p>
+              <p style={{ fontSize: '12px', color: '#dc2626', marginTop: '6px' }}>Quantity must be between 1 and {MAX_PACKAGE_QUANTITY}.</p>
             )}
           </div>
         )}
@@ -749,7 +874,7 @@ function TakeawayModal({
                 phone_number: normalizedPhone,
                 pickup_note: pickupNote.trim(),
               }
-              if (showQuantity) payload.quantity = qty
+              if (showQuantity) payload.quantity = packageQty
               onConfirm(payload)
             }}
           >
@@ -762,7 +887,7 @@ function TakeawayModal({
   )
 }
 
-// â”€â”€ Cutoff helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Cutoff helper ─────────────────────────────────────────────────────────────
 function getCutoffDate(mealTypeName, orderDate) {
   if (!mealTypeName || !orderDate) return null
   const date = new Date(orderDate)
@@ -784,7 +909,7 @@ function getCutoffDate(mealTypeName, orderDate) {
   return null
 }
 
-// â”€â”€ Today's Meal Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Today's Meal Modal ───────────────────────────────────────────────────────
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 const SLOT_META = {
@@ -839,6 +964,8 @@ function addDays(date, days) {
 }
 
 function TodayMealModal({ plan, onClose }) {
+  useBodyScrollLock()
+
   const today = new Date()
   const todayDate = toInputDate(today)
   const maxPackageDate = toInputDate(addDays(today, 3))
@@ -1005,8 +1132,10 @@ function TodayMealModal({ plan, onClose }) {
   )
 }
 
-// â”€â”€ Add Menu Items prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Add Menu Items prompt ─────────────────────────────────────────────────────
 function AddMenuItemsPrompt({ onAddItems, onPlaceOnly, onCancel }) {
+  useBodyScrollLock()
+
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
       <div className="sd-modal sd-package-prompt" onClick={(e) => e.stopPropagation()}>
@@ -1078,6 +1207,8 @@ function getPackageReadyTextFromPayload(payload, mealTypes = []) {
 }
 
 function OrderSuccessModal({ order, onClose, onViewHistory }) {
+  useBodyScrollLock()
+
   if (!order) return null
 
   const isDelivery = order.method === 'delivery'
@@ -1161,7 +1292,7 @@ function OrderSuccessModal({ order, onClose, onViewHistory }) {
   )
 }
 
-// â”€â”€ Panel 1 - Meal Packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 1 - Meal Packages ───────────────────────────────────────────────────
 function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, refetchWeeklyPlan }) {
   const [form, setForm] = useState({
     meal_type: '',
@@ -1194,6 +1325,24 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   const cardDayKey = cardDayJs === 0 ? 6 : cardDayJs - 1
 
   const canPickDate = form.meal_type && form.preference
+
+  useEffect(() => {
+    if (!canPickDate) return
+
+    setForm((prev) => {
+      const needsDefault =
+        !prev.order_date ||
+        prev.order_date < minDate ||
+        prev.order_date > maxDate
+
+      if (!needsDefault) return prev
+
+      return {
+        ...prev,
+        order_date: minDate,
+      }
+    })
+  }, [canPickDate, minDate, maxDate])
 
   const getPlanPrice = (mealTime, mealCategory) => {
     const normalizedMeal = mealTime?.toLowerCase()
@@ -1348,9 +1497,9 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
           <h2 className="sd-panel-title">Meal Packages</h2>
           <p className="sd-panel-subtitle">Select a package and schedule your meal</p>
         </div>
-        <button type="button" className="sd-btn-see-meal" onClick={handleOpenMealMenu} disabled={openingMealMenu}>
+        <button type="button" className="sd-btn-see-meal" onClick={handleOpenMealMenu} disabled={openingMealMenu} aria-label="Choose meal">
           <UtensilsCrossed size={16} strokeWidth={2.2} />
-          <span>{openingMealMenu ? 'Refreshing meals...' : "See Today's Meals"}</span>
+          <span>{openingMealMenu ? 'Refreshing...' : 'Choose Meal'}</span>
         </button>
       </div>
 
@@ -1422,9 +1571,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
               value={form.meal_type}
               required
               onChange={(e) => {
-                const selected = mealTypes.find((t) => t.id === Number(e.target.value))
-                const clearDate = selected?.name?.toLowerCase() === 'dinner' && isPastNoon && form.order_date === today
-                setForm({ ...form, meal_type: e.target.value, order_date: clearDate ? '' : form.order_date })
+                setForm({ ...form, meal_type: e.target.value })
                 setError('')
               }}
             >
@@ -1680,6 +1827,8 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
 }
 
 function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
+  useBodyScrollLock()
+
   const [qty, setQty] = useState(Math.max(1, initialQty || 1))
 
   const increaseQty = () => setQty((prev) => prev + 1)
@@ -1688,6 +1837,9 @@ function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
   return createPortal(
     <div className="sd-modal-overlay" onClick={onClose}>
       <div className="sd-modal sd-item-modal" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="sd-modal-close-btn" onClick={onClose} aria-label="Close item details">
+          <X size={16} strokeWidth={2.4} />
+        </button>
         <div className="sd-modal-header">
           <h3 className="sd-modal-title">Item Details</h3>
           <p className="sd-modal-sub">Review the item details and choose the quantity before adding it to your cart.</p>
@@ -1739,7 +1891,7 @@ function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
   )
 }
 
-// â”€â”€ Panel 2 - Menu Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 2 - Menu Items ──────────────────────────────────────────────────────
 const compareMenuItemsByCode = (a, b) => {
   const parseCode = (item) => {
     const code = (item.item_id || '').trim()
@@ -1778,7 +1930,15 @@ const compareMenuItemsByCode = (a, b) => {
   })
 }
 
-function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent, showToast, onOrderSuccess, mealTypes = [] }) {
+function MenuItemsPanel({
+  refetchOrders,
+  pendingPackageOrder,
+  onPackageOrderSent,
+  showToast,
+  onOrderSuccess,
+  mealTypes = [],
+  onFloatingCartBarChange,
+}) {
   const { data: rawItems = [], loading: loadingItems } = useApi(getStudentItems)
   const [search, setSearch] = useState('')
   const [cart, setCart] = useState({})
@@ -1789,7 +1949,13 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
   const [showDelivery, setShowDelivery] = useState(false)
   const [showTakeaway, setShowTakeaway] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
+  const [showMobileCart, setShowMobileCart] = useState(false)
+  const [pendingRemoveItem, setPendingRemoveItem] = useState(null)
+  const [showClearCartConfirm, setShowClearCartConfirm] = useState(false)
+  const [showShopClosedConfirm, setShowShopClosedConfirm] = useState(false)
   const categoryRefs = useRef({})
+
+  useBodyScrollLock(showMobileCart)
 
   const categories = useMemo(() => {
     const q = search.toLowerCase()
@@ -1814,6 +1980,29 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
   const cartTotal = cartEntries.reduce((sum, e) => sum + Number(e.item.price) * e.qty, 0)
   const cartCount = cartEntries.reduce((sum, e) => sum + e.qty, 0)
   const menuOrderingOpen = isMenuItemOrderOpen()
+  const showFloatingCartBar = cartEntries.length > 0
+    && !selectedItem
+    && !showOrderMethod
+    && !showDelivery
+    && !showTakeaway
+    && !showMobileCart
+  const orderButtonLabel = !menuOrderingOpen
+    ? 'Orders open at 4:00 AM'
+    : cartEntries.length === 0
+      ? 'Add items to order'
+      : pendingPackageOrder
+        ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + pkg)`
+        : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`
+
+  useEffect(() => {
+    if (cartEntries.length === 0) {
+      setShowMobileCart(false)
+    }
+  }, [cartEntries.length])
+
+  useEffect(() => {
+    onFloatingCartBarChange?.(showFloatingCartBar)
+  }, [showFloatingCartBar, onFloatingCartBarChange])
 
   const addToCart = (item, qtyToAdd = 1) =>
     setCart((prev) => ({
@@ -1837,18 +2026,38 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
 
   const decreaseQty = (item) => {
     const current = cart[item.id]?.qty ?? 0
-    if (current <= 1) {
-      setCart((prev) => {
-        const next = { ...prev }
-        delete next[item.id]
-        return next
-      })
-    } else {
+    if (current > 1) {
       setCart((prev) => ({
         ...prev,
         [item.id]: { item, qty: prev[item.id].qty - 1 },
       }))
+      return
     }
+    if (current === 1) setPendingRemoveItem(item)
+  }
+
+  const confirmRemoveCartItem = () => {
+    if (!pendingRemoveItem) return
+    setCart((prev) => {
+      const next = { ...prev }
+      delete next[pendingRemoveItem.id]
+      return next
+    })
+    setPendingRemoveItem(null)
+  }
+
+  const clearCart = () => {
+    setCart({})
+    setError('')
+    setSuccess('')
+    setPendingRemoveItem(null)
+    setShowClearCartConfirm(false)
+  }
+
+  const showShopClosedPopup = () => {
+    setError('')
+    setSuccess('')
+    setShowShopClosedConfirm(true)
   }
 
   const submitCartOrder = async ({
@@ -1863,8 +2072,7 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
     deliveryLongitude = null,
   }) => {
     if (!isMenuItemOrderOpen()) {
-      setError(MENU_ITEM_ORDER_HOURS_MESSAGE)
-      showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
+      showShopClosedPopup()
       return
     }
 
@@ -1946,6 +2154,7 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
   }
 
   const handlePlaceOrder = async () => {
+    setShowMobileCart(false)
     setError('')
     setSuccess('')
     if (cartEntries.length === 0) {
@@ -1953,8 +2162,7 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
       return
     }
     if (!isMenuItemOrderOpen()) {
-      setError(MENU_ITEM_ORDER_HOURS_MESSAGE)
-      showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
+      showShopClosedPopup()
       return
     }
 
@@ -1977,9 +2185,95 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
     })
   }
 
+  const renderCartPanel = ({ mobile = false } = {}) => (
+    <div className={`sd-cart-inner${mobile ? ' sd-cart-inner-mobile' : ''}`}>
+      <div className="sd-cart-header">
+        <span className="sd-cart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <ShoppingCart size={18} strokeWidth={2.2} />
+          Your Cart
+        </span>
+
+        <div className="sd-cart-header-actions">
+          {cartCount > 0 && <span className="sd-cart-count">{cartCount}</span>}
+          {mobile && (
+            <button
+              type="button"
+              className="sd-mobile-cart-close"
+              onClick={() => setShowMobileCart(false)}
+              aria-label="Close cart"
+            >
+              <X size={16} strokeWidth={2.2} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="sd-cart-items">
+        {cartEntries.length === 0 ? (
+          <div className="sd-cart-empty">
+            <span className="sd-cart-empty-icon" style={{ display: 'flex', justifyContent: 'center' }}>
+              <ShoppingCart size={24} strokeWidth={2.2} />
+            </span>
+            <p className="sd-cart-empty-text">No items added yet</p>
+          </div>
+        ) : (
+          cartEntries.map(({ item, qty }) => (
+            <div key={item.id} className="sd-cart-row">
+              <div className="sd-cart-row-info">
+                <p className="sd-cart-row-name">{item.name}</p>
+                <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
+              </div>
+              <div className="sd-cart-row-right">
+                <div className="sd-cart-qty-controls">
+                  <button type="button" className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
+                    <Minus size={14} strokeWidth={2.4} />
+                  </button>
+                  <span className="sd-cart-qty-num">{qty}</span>
+                  <button type="button" className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
+                    <Plus size={14} strokeWidth={2.4} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="sd-cart-footer">
+        {cartEntries.length > 0 && (
+          <div className="sd-cart-total-row">
+            <span className="sd-cart-total-label">Total</span>
+            <span className="sd-cart-total-val">Rs. {cartTotal.toFixed(2)}</span>
+          </div>
+        )}
+        {error && <p className="sd-cart-feedback-error">{error}</p>}
+        {success && <p className="sd-cart-feedback-success">{success}</p>}
+        <button
+          type="button"
+          onClick={handlePlaceOrder}
+          disabled={submitting || cartEntries.length === 0}
+          className={`sd-cart-order-btn ${cartEntries.length > 0 ? 'ready' : 'empty'}`}
+        >
+          {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
+          {orderButtonLabel}
+        </button>
+        {cartEntries.length > 0 && (
+          <button
+            type="button"
+            className="sd-btn-secondary"
+            style={{ justifyContent: 'center' }}
+            onClick={() => setShowClearCartConfirm(true)}
+          >
+            Clear Cart
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
   return (
     <>
-      <div className="sd-panel">
+      <div className={`sd-panel sd-menu-panel${showFloatingCartBar ? ' has-mobile-cart' : ''}`}>
         <div className="sd-panel-header">
           <div>
             <h2 className="sd-panel-title">Menu Items</h2>
@@ -2128,85 +2422,33 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
             )}
           </div>
 
-          <div className="sd-cart">
-            <div className="sd-cart-inner">
-              <div className="sd-cart-header">
-                <span className="sd-cart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <ShoppingCart size={18} strokeWidth={2.2} />
-                  Your Cart
-                </span>
-                {cartCount > 0 && <span className="sd-cart-count">{cartCount}</span>}
-              </div>
-
-              <div className="sd-cart-items">
-                {cartEntries.length === 0 ? (
-                  <div className="sd-cart-empty">
-                    <span className="sd-cart-empty-icon" style={{ display: 'flex', justifyContent: 'center' }}>
-                      <ShoppingCart size={24} strokeWidth={2.2} />
-                    </span>
-                    <p className="sd-cart-empty-text">No items added yet</p>
-                  </div>
-                ) : (
-                  cartEntries.map(({ item, qty }) => (
-                    <div key={item.id} className="sd-cart-row">
-                      <div className="sd-cart-row-info">
-                        <p className="sd-cart-row-name">{item.name}</p>
-                        <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
-                      </div>
-                      <div className="sd-cart-row-right">
-                        <div className="sd-cart-qty-controls">
-                          <button className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
-                            <Minus size={14} strokeWidth={2.4} />
-                          </button>
-                          <span className="sd-cart-qty-num">{qty}</span>
-                          <button className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
-                            <Plus size={14} strokeWidth={2.4} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {cartEntries.length > 0 && (
-                <div className="sd-cart-summary">
-                  {cartEntries.map(({ item, qty }) => (
-                    <div key={item.id} className="sd-cart-summary-row">
-                      <span>{item.name} x {qty}</span>
-                      <span>Rs. {(Number(item.price) * qty).toFixed(2)}</span>
-                    </div>
-                  ))}
-                  <div className="sd-cart-summary-divider" />
-                  <div className="sd-cart-summary-total">
-                    <span>Total</span>
-                    <span>Rs. {cartTotal.toFixed(2)}</span>
-                  </div>
-                </div>
-              )}
-
-              <div className="sd-cart-footer">
-                {error && <p className="sd-cart-feedback-error">{error}</p>}
-                {success && <p className="sd-cart-feedback-success">{success}</p>}
-                <button
-                  onClick={handlePlaceOrder}
-                  disabled={submitting || cartEntries.length === 0 || !menuOrderingOpen}
-                  className={`sd-cart-order-btn ${cartEntries.length > 0 ? 'ready' : 'empty'}`}
-                >
-                  {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
-                  {!menuOrderingOpen
-                    ? 'Orders open at 4:00 AM'
-                    : cartEntries.length === 0
-                    ? 'Add items to order'
-                    : pendingPackageOrder
-                      ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + pkg)`
-                      : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`}
-                </button>
-              </div>
-            </div>
+          <div className="sd-cart sd-cart-desktop">
+            {renderCartPanel()}
           </div>
         </div>
       </div>
+
+      {showFloatingCartBar && (
+        <button type="button" className="sd-mobile-cart-bar" onClick={() => setShowMobileCart(true)}>
+          <span className="sd-mobile-cart-bar-main">
+            <span className="sd-mobile-cart-bar-title">
+              <ShoppingCart size={16} strokeWidth={2.2} />
+              {cartCount} item{cartCount > 1 ? 's' : ''}
+            </span>
+            <span className="sd-mobile-cart-bar-total">Rs. {cartTotal.toFixed(2)}</span>
+          </span>
+          <span className="sd-mobile-cart-bar-cta">Review Cart</span>
+        </button>
+      )}
+
+      {showMobileCart && createPortal(
+        <div className="sd-mobile-cart-overlay" onClick={() => setShowMobileCart(false)}>
+          <div className="sd-mobile-cart-sheet" onClick={(e) => e.stopPropagation()}>
+            {renderCartPanel({ mobile: true })}
+          </div>
+        </div>,
+        document.body
+      )}
 
       {showOrderMethod && (
         <OrderMethodModal
@@ -2280,15 +2522,50 @@ function MenuItemsPanel({ refetchOrders, pendingPackageOrder, onPackageOrderSent
           }}
         />
       )}
+
+      {pendingRemoveItem && (
+        <ConfirmDialog
+          title="Remove item?"
+          message={`Do you want to remove ${pendingRemoveItem.name} from your cart?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemoveCartItem}
+          onCancel={() => setPendingRemoveItem(null)}
+        />
+      )}
+
+      {showClearCartConfirm && (
+        <ConfirmDialog
+          title="Clear cart?"
+          message="Are you sure you want to remove all items from your cart?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          onConfirm={clearCart}
+          onCancel={() => setShowClearCartConfirm(false)}
+        />
+      )}
+
+      {showShopClosedConfirm && (
+        <ConfirmDialog
+          title="Shop is closed"
+          message={SHOP_CLOSED_DIALOG_MESSAGE}
+          confirmLabel="OK"
+          cancelLabel={null}
+          onConfirm={() => setShowShopClosedConfirm(false)}
+          onCancel={() => setShowShopClosedConfirm(false)}
+        />
+      )}
     </>
   )
 }
 
-// â”€â”€ Panel 3 - Order History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 3 - Order History ───────────────────────────────────────────────────
 function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
   const [clearing, setClearing] = useState(false)
   const [cancellingKey, setCancellingKey] = useState('')
   const [selectedHistory, setSelectedHistory] = useState(null)
+
+  useBodyScrollLock(Boolean(selectedHistory))
 
   const sessionRows = useMemo(() => {
     const statusPriority = ['pending', 'confirmed', 'cancelled']
@@ -2631,7 +2908,7 @@ function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
   )
 }
 
-// â”€â”€ Panel 4 - Food Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 4 - Food Analytics ─────────────────────────────────────────────────
 const DAYS  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MEALS = ['breakfast', 'dinner', 'lunch']
 
@@ -2675,7 +2952,7 @@ function SummaryCard({ label, value, CardIcon, small }) {
 function FoodAnalyticsPanel({ orders }) {
   const confirmed = orders.filter((o) => o.status === 'confirmed')
 
-  // â”€â”€ Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Summary ──────────────────────────────────────────────────────────────
   const totalOrders = confirmed.length
 
   // Most ordered item
@@ -2766,14 +3043,14 @@ function FoodAnalyticsPanel({ orders }) {
         <TrendingUp size={22} strokeWidth={2.2} color={T.caramel} />
       </div>
 
-      {/* â”€â”€ Summary Cards â”€â”€ */}
+      {/* ── Summary Cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px', marginBottom: '28px' }}>
         <SummaryCard label="Total Orders"   value={totalOrders}          CardIcon={Package2} />
         <SummaryCard label="Favourite Item" value={topItem?.[0] || '-'}  CardIcon={UtensilsCrossed} small />
         <SummaryCard label="Orders / Day"   value={dailyAvg}             CardIcon={CalendarDays} />
       </div>
 
-      {/* â”€â”€ Top Items Bar Chart â”€â”€ */}
+      {/* ── Top Items Bar Chart ── */}
       {topItems.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Most Ordered</p>
@@ -2796,7 +3073,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* â”€â”€ Package Breakdown â”€â”€ */}
+      {/* ── Package Breakdown ── */}
       {pkgEntries.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Package Breakdown</p>
@@ -2837,7 +3114,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* â”€â”€ Monthly Spend â”€â”€ */}
+      {/* ── Monthly Spend ── */}
       {monthEntries.length > 0 && (
         <div style={{ marginBottom: '28px' }}>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Monthly Spend</p>
@@ -2853,7 +3130,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       )}
 
-      {/* â”€â”€ Heatmap â”€â”€ */}
+      {/* ── Heatmap ── */}
       <div style={{ marginBottom: '28px' }}>
         <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '14px' }}>Order Activity Heatmap</p>
         <div style={{ overflowX: 'auto' }}>
@@ -2888,7 +3165,7 @@ function FoodAnalyticsPanel({ orders }) {
         </div>
       </div>
 
-      {/* â”€â”€ Habit Tags â”€â”€ */}
+      {/* ── Habit Tags ── */}
       {habitTags.length > 0 && (
         <div>
           <p style={{ fontSize: '12px', fontWeight: 700, color: T.coffeeMid, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px' }}>Your Eating Habits</p>
@@ -2905,7 +3182,7 @@ function FoodAnalyticsPanel({ orders }) {
   )
 }
 
-// â”€â”€ Panel 5 - Suggestions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 5 - Suggestions ─────────────────────────────────────────────────────
 function SuggestionsPanel({ showToast }) {
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -2972,8 +3249,10 @@ function SuggestionsPanel({ showToast }) {
   )
 }
 
-// â”€â”€ Profile Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Profile Modal ────────────────────────────────────────────────────────────
 function ProfileModal({ user, onClose, onSaved }) {
+  useBodyScrollLock()
+
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
     email:     user?.email     || '',
@@ -3011,6 +3290,10 @@ function ProfileModal({ user, onClose, onSaved }) {
 
     if (!fullName) {
       setError('Full name is required.')
+      return
+    }
+    if (!isValidFullName(fullName)) {
+      setError('Full name must contain letters and spaces only.')
       return
     }
     if (email && !isValidEmail(email)) {
@@ -3078,10 +3361,17 @@ function ProfileModal({ user, onClose, onSaved }) {
                     className="sd-input"
                     type={type}
                     value={form[field]}
-                    onChange={(e) => setForm({ ...form, [field]: field === 'contact' ? normalizePhone(e.target.value) : e.target.value })}
+                    onChange={(e) => setForm({
+                      ...form,
+                      [field]: field === 'contact'
+                        ? normalizePhone(e.target.value)
+                        : field === 'full_name'
+                          ? e.target.value.replace(/[^\p{L}\s]/gu, '')
+                          : e.target.value,
+                    })}
                     placeholder={`Enter ${label.toLowerCase()}...`}
                     inputMode={field === 'contact' ? 'numeric' : undefined}
-                    maxLength={field === 'contact' ? 10 : undefined}
+                    maxLength={field === 'contact' ? 10 : field === 'email' ? EMAIL_MAX_LENGTH : field === 'full_name' ? FULL_NAME_MAX_LENGTH : undefined}
                     pattern={field === 'contact' ? '[0-9]*' : undefined}
                   />
                 </div>
@@ -3122,7 +3412,7 @@ function ProfileModal({ user, onClose, onSaved }) {
   )
 }
 
-// â”€â”€ Panel 6 - About Cafe Lush â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Panel 6 - About Cafe Lush ─────────────────────────────────────────────────
 function AboutCafeLushPanel() {
   return (
     <div className="sd-panel">
@@ -3192,7 +3482,7 @@ function AboutCafeLushPanel() {
   )
 }
 
-// â”€â”€ Tab config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Tab config ────────────────────────────────────────────────────────────────
 const TABS = [
   { key: 'packages',    label: 'Meal Packages',    Icon: Package2   },
   { key: 'menu',        label: 'Menu Items',        Icon: BookOpen   },
@@ -3274,13 +3564,88 @@ function formatNotificationCard(notification) {
   }
 }
 
-// â”€â”€ Main Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function NotificationDetailModal({ notification, onClose, onDelete }) {
+  useBodyScrollLock()
+
+  const card = formatNotificationCard(notification)
+  const detail = notification.order_detail
+  const deliveryLabel = detail?.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'
+  const fee = Number(detail?.delivery_fee || 0)
+  const unitPrice = Number(detail?.unit_price || 0)
+
+  const rows = detail ? [
+    ['Order Ref', detail.order_reference || '-'],
+    ['Bill No', detail.bill_number || 'Not generated yet'],
+    ['Status', detail.status || '-'],
+    ['Type', detail.order_kind || detail.order_type || '-'],
+    ['Item / Package', detail.label || detail.name || '-'],
+    ['Quantity', detail.quantity || 1],
+    ['Order Date', detail.order_date || '-'],
+    ['Method', deliveryLabel],
+    ['Ready Time', detail.pickup_time || (detail.delivery_type === 'delivery' ? 'Delivery time' : 'Ready soon')],
+    ['Address / Note', detail.delivery_address || '-'],
+    ['Phone', detail.phone_number || '-'],
+    ['Email', detail.student_email || '-'],
+    ['Unit Price', `Rs. ${unitPrice.toFixed(2)}`],
+    ['Delivery Fee', `Rs. ${fee.toFixed(2)}`],
+  ] : []
+
+  return createPortal(
+    <div className="sd-notif-modal-backdrop" onClick={onClose}>
+      <div className="sd-notif-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-notif-modal-head">
+          <div>
+            <p className="sd-notif-modal-kicker">Notification details</p>
+            <h2>{card.title}</h2>
+          </div>
+          <button type="button" className="sd-notif-close" onClick={onClose} aria-label="Close notification details">
+            <X size={16} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        <p className="sd-notif-modal-message">{notification.message}</p>
+
+        {detail && (
+          <div className="sd-notif-detail-grid">
+            {rows.map(([label, value]) => (
+              <div key={label} className="sd-notif-detail-row">
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="sd-notif-modal-foot">
+          <span>{formatNotificationTime(notification.created_at)}</span>
+          <button type="button" className="sd-notif-action danger" onClick={() => onDelete(notification.id)}>
+            Delete notification
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function StudentDashboard() {
   const { user, setUser, logout } = useAuth()
   const [activeTab, setActiveTab] = useState('packages')
   const [showNotifs, setShowNotifs] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [notifs, setNotifs] = useState([])
+  const [selectedNotification, setSelectedNotification] = useState(null)
+  const [selectedNotifIds, setSelectedNotifIds] = useState([])
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [orderSuccess, setOrderSuccess] = useState(null)
+  const [toast, setToast] = useState(null)
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false)
+  const [notificationConfirm, setNotificationConfirm] = useState(null)
+
+  useBodyScrollLock(showMobileSidebar)
+
+  const showToast = (message, type = 'success') => setToast({ message, type })
 
   useEffect(() => {
     const fetchNotifs = async () => {
@@ -3297,16 +3662,133 @@ export default function StudentDashboard() {
   }, [])
 
   const unreadCount = notifs.filter((n) => !n.is_read).length
+  const selectedNotifSet = useMemo(() => new Set(selectedNotifIds), [selectedNotifIds])
 
-  const handleOpenNotifs = async () => {
+  const handleOpenNotifs = () => {
     setShowNotifs(true)
-    if (unreadCount > 0) {
+  }
+
+  const toggleNotificationSelection = (id) => {
+    setSelectedNotifIds((prev) => (
+      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]
+    ))
+  }
+
+  const handleNotificationClick = async (notification) => {
+    if (selectionMode) {
+      toggleNotificationSelection(notification.id)
+      return
+    }
+
+    setSelectedNotification(notification)
+    if (!notification.is_read) {
       try {
-        await markNotificationsRead()
-        setNotifs((prev) => prev.map((n) => ({ ...n, is_read: true })))
+        const { data } = await markNotificationRead(notification.id)
+        setNotifs((prev) => prev.map((n) => (n.id === notification.id ? data : n)))
+        setSelectedNotification(data)
       } catch {
-        // ignore
+        setNotifs((prev) => prev.map((n) => (
+          n.id === notification.id ? { ...n, is_read: true } : n
+        )))
       }
+    }
+  }
+
+  const handleMarkAllNotificationsRead = async () => {
+    if (unreadCount === 0) return
+    try {
+      await markAllNotificationsRead()
+      setNotifs((prev) => prev.map((n) => ({ ...n, is_read: true })))
+      setSelectedNotification((prev) => (prev ? { ...prev, is_read: true } : prev))
+    } catch {
+      showToast('Failed to mark notifications as read.', 'error')
+    }
+  }
+
+  const handleDeleteNotification = async (id) => {
+    setNotificationConfirm({
+      type: 'single',
+      id,
+      title: 'Delete notification?',
+      message: 'Are you sure you want to delete this notification?',
+      confirmLabel: 'Yes, Delete',
+    })
+  }
+
+  const confirmDeleteNotification = async (id) => {
+    try {
+      await deleteNotification(id)
+      setNotifs((prev) => prev.filter((n) => n.id !== id))
+      setSelectedNotifIds((prev) => prev.filter((value) => value !== id))
+      setSelectedNotification((prev) => (prev?.id === id ? null : prev))
+      showToast('Notification deleted.')
+    } catch {
+      showToast('Failed to delete notification.', 'error')
+    }
+  }
+
+  const handleDeleteSelectedNotifications = async () => {
+    if (selectedNotifIds.length === 0) return
+    setNotificationConfirm({
+      type: 'selected',
+      ids: [...selectedNotifIds],
+      title: 'Delete selected?',
+      message: `Are you sure you want to delete ${selectedNotifIds.length} selected notification${selectedNotifIds.length === 1 ? '' : 's'}?`,
+      confirmLabel: 'Yes, Delete',
+    })
+  }
+
+  const confirmDeleteSelectedNotifications = async (ids) => {
+    try {
+      await deleteSelectedNotifications(ids)
+      const selected = new Set(ids)
+      setNotifs((prev) => prev.filter((n) => !selected.has(n.id)))
+      setSelectedNotification((prev) => (prev && selected.has(prev.id) ? null : prev))
+      setSelectedNotifIds([])
+      setSelectionMode(false)
+      showToast('Selected notifications deleted.')
+    } catch {
+      showToast('Failed to delete selected notifications.', 'error')
+    }
+  }
+
+  const handleDeleteAllNotifications = async () => {
+    if (notifs.length === 0) return
+    setNotificationConfirm({
+      type: 'all',
+      title: 'Delete all notifications?',
+      message: 'Are you sure you want to delete all notifications? This cannot be undone.',
+      confirmLabel: 'Yes, Delete All',
+    })
+  }
+
+  const confirmDeleteAllNotifications = async () => {
+    try {
+      await deleteAllNotifications()
+      setNotifs([])
+      setSelectedNotifIds([])
+      setSelectionMode(false)
+      setSelectedNotification(null)
+      showToast('All notifications deleted.')
+    } catch {
+      showToast('Failed to delete notifications.', 'error')
+    }
+  }
+
+  const handleConfirmNotificationDelete = async () => {
+    if (!notificationConfirm) return
+    const action = notificationConfirm
+    setNotificationConfirm(null)
+    if (action.type === 'single') {
+      await confirmDeleteNotification(action.id)
+      return
+    }
+    if (action.type === 'selected') {
+      await confirmDeleteSelectedNotifications(action.ids || [])
+      return
+    }
+    if (action.type === 'all') {
+      await confirmDeleteAllNotifications()
     }
   }
 
@@ -3319,11 +3801,14 @@ export default function StudentDashboard() {
   }, [orders])
 
   const [weeklyPlan, setWeeklyPlan] = useState({})
+  const [mobileMenuCartVisible, setMobileMenuCartVisible] = useState(false)
   const [pendingPackageOrder, setPendingPackageOrder] = useState(null)
-  const [orderSuccess, setOrderSuccess] = useState(null)
-  const [toast, setToast] = useState(null)
 
-  const showToast = (message, type = 'success') => setToast({ message, type })
+  const selectTab = useCallback((key) => {
+    setActiveTab(key)
+    setShowMobileSidebar(false)
+    if (key !== 'menu') setMobileMenuCartVisible(false)
+  }, [])
 
   const fetchWeeklyPlan = useCallback(async () => {
     try {
@@ -3339,13 +3824,101 @@ export default function StudentDashboard() {
   }, [])
 
   useEffect(() => {
-    fetchWeeklyPlan()
+    const timer = setTimeout(() => {
+      void fetchWeeklyPlan()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchWeeklyPlan])
+
+  const handleSelectTab = (key) => {
+    selectTab(key)
+  }
+
+  const handleLogoutClick = () => {
+    setShowMobileSidebar(false)
+    logout()
+  }
+
+  const renderSidebarContent = () => (
+    <>
+      <div className="sd-brand">
+        <div className="sd-brand-logo">
+          <img
+            src="/image/image6.jpeg"
+            alt="Shantha logo"
+            style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              objectFit: 'cover',
+              flexShrink: 0,
+              boxShadow: '0 0 0 2.5px #C9A84C, 0 0 14px rgba(201,168,76,0.35)',
+            }}
+          />
+          <div>
+            <div className="sd-brand-name">Cafe Lush</div>
+            <div className="sd-brand-sub">Student Portal</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="sd-user">
+        <div className="sd-avatar">
+          {user?.username?.[0]?.toUpperCase() || 'S'}
+        </div>
+        <div>
+          <div className="sd-username">{user?.username}</div>
+          <div className="sd-userrole">Student</div>
+        </div>
+      </div>
+
+      <nav className="sd-nav">
+        <div className="sd-nav-label">My Portal</div>
+
+        {TABS.map(({ key, label, Icon }) => {
+          const TabIcon = Icon
+          return (
+            <button
+              key={key}
+              onClick={() => handleSelectTab(key)}
+              className={`sd-nav-item${activeTab === key ? ' active' : ''}`}
+              style={{ width: '100%', border: 'none', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '10px' }}
+            >
+              <TabIcon size={16} strokeWidth={2.2} />
+              <span>{label}</span>
+              {key === 'menu' && pendingPackageOrder && (
+                <span className="sd-nav-badge" style={{ background: '#3D6B38', marginLeft: 'auto' }}>
+                  +pkg
+                </span>
+              )}
+              {key === 'history' && orderSessionCount > 0 && !pendingPackageOrder && (
+                <span className="sd-nav-badge" style={{ marginLeft: 'auto' }}>
+                  {orderSessionCount}
+                </span>
+              )}
+              {key === 'history' && orderSessionCount > 0 && pendingPackageOrder && (
+                <span className="sd-nav-badge">
+                  {orderSessionCount}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </nav>
+
+      <div className="sd-sidebar-footer">
+        <button onClick={handleLogoutClick} className="sd-logout-btn" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <LogOut size={16} strokeWidth={2.2} />
+          Logout
+        </button>
+      </div>
+    </>
+  )
 
   const handlePackageReady = async (payload, addMenuItems) => {
     if (addMenuItems) {
       setPendingPackageOrder(payload)
-      setActiveTab('menu')
+      selectTab('menu')
     } else {
       try {
         const { data: createdOrders = [] } = await placeMealOrdersBatch([payload])
@@ -3373,88 +3946,39 @@ export default function StudentDashboard() {
   return (
     <div className="sd-root">
       <aside className="sd-sidebar">
-        <div className="sd-brand">
-          <div className="sd-brand-logo">
-            <img
-              src="/image/image6.jpeg"
-              alt="Shantha logo"
-              style={{
-                width: '42px',
-                height: '42px',
-                borderRadius: '50%',
-                objectFit: 'cover',
-                flexShrink: 0,
-                boxShadow: '0 0 0 2.5px #C9A84C, 0 0 14px rgba(201,168,76,0.35)',
-              }}
-            />
-            <div>
-              <div className="sd-brand-name">Cafe Lush</div>
-              <div className="sd-brand-sub">Student Portal</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="sd-user">
-          <div className="sd-avatar">
-            {user?.username?.[0]?.toUpperCase() || 'S'}
-          </div>
-          <div>
-            <div className="sd-username">{user?.username}</div>
-            <div className="sd-userrole">Student</div>
-          </div>
-        </div>
-
-        <nav className="sd-nav">
-          <div className="sd-nav-label">My Portal</div>
-
-          {TABS.map(({ key, label, Icon }) => {
-            const TabIcon = Icon
-            return (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`sd-nav-item${activeTab === key ? ' active' : ''}`}
-              style={{ width: '100%', border: 'none', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '10px' }}
-            >
-              <TabIcon size={16} strokeWidth={2.2} />
-              <span>{label}</span>
-              {key === 'menu' && pendingPackageOrder && (
-                <span className="sd-nav-badge" style={{ background: '#3D6B38', marginLeft: 'auto' }}>
-                  +pkg
-                </span>
-              )}
-              {key === 'history' && orderSessionCount > 0 && !pendingPackageOrder && (
-                <span className="sd-nav-badge" style={{ marginLeft: 'auto' }}>
-                  {orderSessionCount}
-                </span>
-              )}
-              {key === 'history' && orderSessionCount > 0 && pendingPackageOrder && (
-                <span className="sd-nav-badge">
-                  {orderSessionCount}
-                </span>
-              )}
-            </button>
-            )
-          })}
-        </nav>
-
-        <div className="sd-sidebar-footer">
-          <button onClick={logout} className="sd-logout-btn" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <LogOut size={16} strokeWidth={2.2} />
-            Logout
-          </button>
-        </div>
+        {renderSidebarContent()}
       </aside>
 
-      {/* â”€â”€ Mobile bottom nav â”€â”€ */}
-      <nav className="sd-bottom-nav">
+      {showMobileSidebar && (
+        <div className="sd-mobile-sidebar-overlay" onClick={() => setShowMobileSidebar(false)}>
+          <aside className="sd-mobile-sidebar-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="sd-mobile-sidebar-head">
+              <span className="sd-mobile-sidebar-title">Portal Menu</span>
+              <button
+                type="button"
+                className="sd-mobile-sidebar-close"
+                onClick={() => setShowMobileSidebar(false)}
+                aria-label="Close navigation menu"
+              >
+                <X size={18} strokeWidth={2.2} />
+              </button>
+            </div>
+            <div className="sd-mobile-sidebar-scroll">
+              {renderSidebarContent()}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* ── Mobile bottom nav ── */}
+      <nav className={`sd-bottom-nav${mobileMenuCartVisible || showMobileSidebar ? ' sd-bottom-nav-hidden' : ''}`}>
         {TABS.map(({ key, label, Icon }) => {
           const NavIcon = Icon
           return (
             <button
               key={key}
               className={`sd-bottom-nav-item${activeTab === key ? ' active' : ''}`}
-              onClick={() => setActiveTab(key)}
+              onClick={() => handleSelectTab(key)}
             >
               <NavIcon size={20} strokeWidth={2.2} />
               <span>{label.split(' ')[0]}</span>
@@ -3464,7 +3988,7 @@ export default function StudentDashboard() {
             </button>
           )
         })}
-        <button className="sd-bottom-nav-item" onClick={logout}>
+        <button className="sd-bottom-nav-item" onClick={handleLogoutClick}>
           <LogOut size={20} strokeWidth={2.2} />
           <span>Logout</span>
         </button>
@@ -3472,7 +3996,16 @@ export default function StudentDashboard() {
 
       <div className="sd-main">
         <header className="sd-topbar">
-          <div>
+          <div className="sd-topbar-left">
+            <button
+              type="button"
+              className="sd-mobile-menu-btn"
+              onClick={() => setShowMobileSidebar(true)}
+              aria-label="Open portal menu"
+            >
+              <MenuIcon size={18} strokeWidth={2.3} />
+            </button>
+            <div>
             <h1 className="sd-topbar-title">
               {TABS.find((t) => t.key === activeTab)?.label}
             </h1>
@@ -3484,6 +4017,7 @@ export default function StudentDashboard() {
                 day: 'numeric',
               })}
             </p>
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div className="sd-topbar-welcome">
@@ -3513,6 +4047,43 @@ export default function StudentDashboard() {
                         <X size={16} strokeWidth={2.2} />
                       </button>
                     </div>
+                    {notifs.length > 0 && (
+                      <div className="sd-notif-actions">
+                        <button
+                          type="button"
+                          className="sd-notif-action"
+                          onClick={handleMarkAllNotificationsRead}
+                          disabled={unreadCount === 0}
+                        >
+                          Mark all as read
+                        </button>
+                        <button
+                          type="button"
+                          className={`sd-notif-action ${selectionMode ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectionMode((prev) => {
+                              if (prev) setSelectedNotifIds([])
+                              return !prev
+                            })
+                          }}
+                        >
+                          {selectionMode ? 'Cancel select' : 'Select'}
+                        </button>
+                        {selectionMode && (
+                          <button
+                            type="button"
+                            className="sd-notif-action danger"
+                            onClick={handleDeleteSelectedNotifications}
+                            disabled={selectedNotifIds.length === 0}
+                          >
+                            Delete selected ({selectedNotifIds.length})
+                          </button>
+                        )}
+                        <button type="button" className="sd-notif-action danger" onClick={handleDeleteAllNotifications}>
+                          Delete all
+                        </button>
+                      </div>
+                    )}
                     <div className="sd-notif-list">
                       {notifs.length === 0 ? (
                         <div className="sd-notif-empty">
@@ -3524,7 +4095,29 @@ export default function StudentDashboard() {
                         notifs.map((n) => {
                           const card = formatNotificationCard(n)
                           return (
-                            <div key={n.id} className={n.is_read ? `sd-notif-item ${card.tone}` : `sd-notif-item ${card.tone} unread`}>
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              key={n.id}
+                              className={n.is_read ? `sd-notif-item ${card.tone}` : `sd-notif-item ${card.tone} unread`}
+                              onClick={() => handleNotificationClick(n)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  handleNotificationClick(n)
+                                }
+                              }}
+                            >
+                              {selectionMode && (
+                                <span className="sd-notif-select" onClick={(e) => e.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedNotifSet.has(n.id)}
+                                    onChange={() => toggleNotificationSelection(n.id)}
+                                    aria-label={`Select notification ${n.id}`}
+                                  />
+                                </span>
+                              )}
                               <span className="sd-notif-icon">
                                 {card.tone === 'danger'
                                   ? <X size={14} strokeWidth={2.4} />
@@ -3589,6 +4182,7 @@ export default function StudentDashboard() {
               showToast={showToast}
               onOrderSuccess={setOrderSuccess}
               mealTypes={mealTypes}
+              onFloatingCartBarChange={setMobileMenuCartVisible}
             />
           )}
 
@@ -3629,8 +4223,27 @@ export default function StudentDashboard() {
           onClose={() => setOrderSuccess(null)}
           onViewHistory={() => {
             setOrderSuccess(null)
-            setActiveTab('history')
+            selectTab('history')
           }}
+        />
+      )}
+
+      {selectedNotification && (
+        <NotificationDetailModal
+          notification={selectedNotification}
+          onClose={() => setSelectedNotification(null)}
+          onDelete={handleDeleteNotification}
+        />
+      )}
+
+      {notificationConfirm && (
+        <ConfirmDialog
+          title={notificationConfirm.title}
+          message={notificationConfirm.message}
+          confirmLabel={notificationConfirm.confirmLabel}
+          cancelLabel="No, Keep"
+          onConfirm={handleConfirmNotificationDelete}
+          onCancel={() => setNotificationConfirm(null)}
         />
       )}
     </div>

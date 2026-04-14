@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import {
   getItems,
   getCategories,
@@ -41,18 +41,17 @@ function ImagePicker({ currentUrl, onChange }) {
   const inputRef = useRef()
   const [preview, setPreview] = useState(null)
 
-  useEffect(() => {
-    setPreview(null)
-  }, [currentUrl])
-
   const handleFile = (e) => {
     const file = e.target.files[0]
     if (!file) return
-    setPreview(URL.createObjectURL(file))
+    setPreview({
+      sourceUrl: currentUrl || '',
+      url: URL.createObjectURL(file),
+    })
     onChange(file)
   }
 
-  const displayed = preview || currentUrl
+  const displayed = preview?.sourceUrl === (currentUrl || '') ? preview.url : currentUrl
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -644,6 +643,7 @@ export default function ItemsManagement() {
                 min="0.01"
                 placeholder="0.00"
                 value={itemForm.price}
+                onWheel={(e) => e.currentTarget.blur()}
                 onChange={(e) =>
                   setItemForm({ ...itemForm, price: e.target.value })
                 }

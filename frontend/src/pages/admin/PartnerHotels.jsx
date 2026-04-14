@@ -52,7 +52,9 @@ export default function PartnerHotels() {
   }
 
   const handleDelete = async () => {
-    try { await deleteBranch(deleteId) } catch {}
+    try { await deleteBranch(deleteId) } catch {
+      // Refresh below keeps the list accurate if the branch was already removed.
+    }
     setDeleteId(null); fetchAll()
   }
 
@@ -203,6 +205,7 @@ export default function PartnerHotels() {
                 <input
                   className="ad-input" type="number" step="0.01" min="0" max="100"
                   value={form.commission_rate}
+                  onWheel={(e) => e.currentTarget.blur()}
                   onChange={(e) => setForm({ ...form, commission_rate: e.target.value })}
                   required
                 />

@@ -27,6 +27,7 @@ from .delivery import (
     LOCATION_SOURCE_CURRENT,
     build_delivery_address,
     calculate_delivery_quote,
+    get_allowed_delivery_areas,
 )
 from .order_reference import build_order_reference, build_walkin_order_reference
 from .models import MealType, MealOrder, Student, Notification, MealPackage, Bill, BillSequence, Suggestion
@@ -159,6 +160,24 @@ def _calculate_session_delivery_fee(validated_serializers):
         serializer.validated_data.get('order_type', 'package') == 'package'
         for serializer in validated_serializers
     )
+    location_source = _single_batch_value(validated_serializers, 'location_source') or LOCATION_SOURCE_ADDRESS
+    full_address = build_delivery_address(
+        _single_batch_value(validated_serializers, 'address_line_1') or '',
+        _single_batch_value(validated_serializers, 'address_line_2') or '',
+        _single_batch_value(validated_serializers, 'city_area') or '',
+    )
+    city_area = _single_batch_value(validated_serializers, 'city_area') or ''
+    latitude = _single_batch_value(validated_serializers, 'delivery_latitude')
+    longitude = _single_batch_value(validated_serializers, 'delivery_longitude')
+    return calculate_delivery_quote(
+        delivery_type=delivery_type,
+        has_package=has_package,
+        location_source=location_source,
+        full_address=full_address,
+        city_area=city_area,
+        latitude=latitude,
+        longitude=longitude,
+    )
 
 
 def _ordered_available_items():
@@ -176,22 +195,6 @@ def _ordered_available_items():
             item_code_number=Substr('item_id', 1, 3),
         )
         .order_by('missing_item_code', 'item_code_group', 'item_code_number', 'name', 'id')
-    )
-    location_source = _single_batch_value(validated_serializers, 'location_source') or LOCATION_SOURCE_ADDRESS
-    full_address = build_delivery_address(
-        _single_batch_value(validated_serializers, 'address_line_1') or '',
-        _single_batch_value(validated_serializers, 'address_line_2') or '',
-        _single_batch_value(validated_serializers, 'city_area') or '',
-    )
-    latitude = _single_batch_value(validated_serializers, 'delivery_latitude')
-    longitude = _single_batch_value(validated_serializers, 'delivery_longitude')
-    return calculate_delivery_quote(
-        delivery_type=delivery_type,
-        has_package=has_package,
-        location_source=location_source,
-        full_address=full_address,
-        latitude=latitude,
-        longitude=longitude,
     )
 
 
@@ -285,6 +288,7 @@ class MealOrderView(APIView):
                 has_package=order_type == 'package',
                 location_source=serializer.validated_data.get('location_source', LOCATION_SOURCE_ADDRESS),
                 full_address=serializer.validated_data.get('delivery_address', ''),
+                city_area=serializer.validated_data.get('city_area', ''),
                 latitude=serializer.validated_data.get('delivery_latitude'),
                 longitude=serializer.validated_data.get('delivery_longitude'),
             )
@@ -336,6 +340,7 @@ class DeliveryFeeEstimateView(APIView):
                 has_package=has_package,
                 location_source=location_source,
                 full_address=full_address,
+                city_area=city_area,
                 latitude=request.data.get('delivery_latitude'),
                 longitude=request.data.get('delivery_longitude'),
             )
@@ -350,6 +355,13 @@ class DeliveryFeeEstimateView(APIView):
             'delivery_address': full_address,
             'location_source': quote['location_source'],
         })
+
+
+class DeliveryAreaListView(APIView):
+    permission_classes = [IsAdminOrStudent]
+
+    def get(self, request):
+        return Response({'areas': get_allowed_delivery_areas()})
 
 
 class MealOrderBatchView(APIView):
@@ -550,6 +562,35 @@ def _record_payment(order):
     )
 
 
+def _order_status_label(order):
+    if order.order_type == 'item':
+        return order.item.name if order.item else 'Item'
+    meal = order.meal_type.name if order.meal_type else 'Package'
+    return f"{'Veg' if order.preference == 'veg' else 'Non-Veg'} {meal}" if order.preference else meal
+
+
+def _session_notification_message(session_orders, new_status):
+    first = session_orders[0]
+    order_ref = build_order_reference(first)
+    total_qty = sum(order.quantity or 0 for order in session_orders)
+    unique_count = len(session_orders)
+
+    if unique_count == 1:
+        label = _order_status_label(first)
+        order_text = f'your {label} order for {first.order_date}'
+    else:
+        order_text = f'your order {order_ref} with {total_qty} total item{"s" if total_qty != 1 else ""}'
+
+    if new_status == 'confirmed':
+        ready_text = _order_ready_message(first) if unique_count == 1 else 'Please check your order details for ready time.'
+        return f'✅ {order_text} has been confirmed! {ready_text}'
+    if new_status == 'cancelled':
+        return f'❌ {order_text} has been cancelled. Please contact us if you have any questions.'
+
+    done = 'delivered' if first.delivery_type == 'delivery' else 'picked up'
+    return f'✅ {order_text} has been completed. Thank you - it was marked as {done}.'
+
+
 class MealOrderStatusView(APIView):
     """Cashier confirms or cancels an order → creates in-app notification for the student."""
     permission_classes = [IsAdminOrCashier]
@@ -601,8 +642,19 @@ class MealOrderStatusView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        now = timezone.now()
         order.status = new_status
-        order.save()
+        update_fields = ['status']
+        if new_status == 'confirmed' and not order.confirmed_at:
+            order.confirmed_at = now
+            update_fields.append('confirmed_at')
+        elif new_status == 'cancelled' and not order.cancelled_at:
+            order.cancelled_at = now
+            update_fields.append('cancelled_at')
+        elif new_status == 'completed' and not order.completed_at:
+            order.completed_at = now
+            update_fields.append('completed_at')
+        order.save(update_fields=update_fields)
 
         if new_status == 'confirmed':
             _record_payment(order)
@@ -632,6 +684,81 @@ class MealOrderStatusView(APIView):
 
         Notification.objects.create(student=order.student, order=order, message=msg)
         return Response(MealOrderSerializer(order).data)
+
+
+class MealOrderSessionStatusView(APIView):
+    """Cashier updates all orders in one online session and sends one student notification."""
+    permission_classes = [IsAdminOrCashier]
+
+    @transaction.atomic
+    def patch(self, request, session_id):
+        new_status = request.data.get('status')
+        if new_status not in ('confirmed', 'cancelled', 'completed'):
+            return Response({'detail': 'Status must be confirmed, cancelled, or completed.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session_orders = list(
+            MealOrder.objects
+            .select_for_update()
+            .filter(session_id=session_id)
+            .order_by('created_at', 'id')
+        )
+        if not session_orders:
+            return Response({'detail': 'Order session not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if all(order.status == new_status for order in session_orders):
+            return Response(MealOrderSerializer(session_orders, many=True).data)
+
+        bill_exists = Bill.objects.filter(source='online', meal_order__session_id=session_id).exists()
+        if bill_exists and new_status != 'completed':
+            return Response(
+                {'detail': 'This order already has a bill and cannot be changed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if any(order.status in ('cancelled', 'completed') for order in session_orders):
+            return Response(
+                {'detail': 'Completed or cancelled orders cannot be changed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_status == 'completed' and any(order.status != 'confirmed' for order in session_orders):
+            return Response(
+                {'detail': 'Only confirmed orders can be completed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_status in ('confirmed', 'cancelled') and any(order.status != 'pending' for order in session_orders):
+            return Response(
+                {'detail': 'Only pending orders can be confirmed or rejected.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        for order in session_orders:
+            order.status = new_status
+            update_fields = ['status']
+            if new_status == 'confirmed' and not order.confirmed_at:
+                order.confirmed_at = now
+                update_fields.append('confirmed_at')
+            elif new_status == 'cancelled' and not order.cancelled_at:
+                order.cancelled_at = now
+                update_fields.append('cancelled_at')
+            elif new_status == 'completed' and not order.completed_at:
+                order.completed_at = now
+                update_fields.append('completed_at')
+            order.save(update_fields=update_fields)
+
+            if new_status == 'confirmed':
+                _record_payment(order)
+            elif new_status == 'cancelled':
+                Payment.objects.filter(reference_type='meal', reference_id=order.id).delete()
+
+        Notification.objects.create(
+            student=session_orders[0].student,
+            order=session_orders[0],
+            message=_session_notification_message(session_orders, new_status),
+        )
+        return Response(MealOrderSerializer(session_orders, many=True).data)
 
 
 class StudentOrderCancelView(APIView):
@@ -694,9 +821,11 @@ class StudentOrderCancelView(APIView):
         except ValueError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        cancelled_at = timezone.now()
         for session_order in session_orders:
             session_order.status = 'cancelled'
-            session_order.save(update_fields=['status'])
+            session_order.cancelled_at = cancelled_at
+            session_order.save(update_fields=['status', 'cancelled_at'])
 
         package_order = package_orders[0]
         label = package_order.package_label if hasattr(package_order, 'package_label') else None
@@ -713,23 +842,102 @@ class StudentOrderCancelView(APIView):
         return Response(MealOrderSerializer(session_orders, many=True).data)
 
 
+def _student_for_user(user):
+    return Student.objects.filter(user=user).first()
+
+
 class NotificationView(APIView):
-    """Student fetches their notifications and marks them all read."""
+    """Student fetches their notifications. PATCH is kept for old clients as mark-all-read."""
     permission_classes = [IsStudent]
 
     def get(self, request):
-        student = Student.objects.filter(user=request.user).first()
+        student = _student_for_user(request.user)
         if not student:
             return Response([])
-        notifs = Notification.objects.filter(student=student)
+        notifs = Notification.objects.filter(student=student).select_related(
+            'order',
+            'order__meal_type',
+            'order__item',
+            'order__bill',
+        )
         return Response(NotificationSerializer(notifs, many=True).data)
 
     def patch(self, request):
-        student = Student.objects.filter(user=request.user).first()
+        student = _student_for_user(request.user)
         if not student:
             return Response([])
         Notification.objects.filter(student=student, is_read=False).update(is_read=True)
         return Response({'detail': 'All marked as read.'})
+
+
+class NotificationReadAllView(APIView):
+    permission_classes = [IsStudent]
+
+    def patch(self, request):
+        student = _student_for_user(request.user)
+        if not student:
+            return Response({'detail': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        updated = Notification.objects.filter(student=student, is_read=False).update(is_read=True)
+        return Response({'detail': 'All marked as read.', 'updated': updated})
+
+
+class NotificationDetailView(APIView):
+    permission_classes = [IsStudent]
+
+    def patch(self, request, pk):
+        student = _student_for_user(request.user)
+        if not student:
+            return Response({'detail': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        notif = Notification.objects.filter(student=student, pk=pk).select_related(
+            'order',
+            'order__meal_type',
+            'order__item',
+            'order__bill',
+        ).first()
+        if not notif:
+            return Response({'detail': 'Notification not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not notif.is_read:
+            notif.is_read = True
+            notif.save(update_fields=['is_read'])
+        return Response(NotificationSerializer(notif).data)
+
+    def delete(self, request, pk):
+        student = _student_for_user(request.user)
+        if not student:
+            return Response({'detail': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        deleted, _ = Notification.objects.filter(student=student, pk=pk).delete()
+        if not deleted:
+            return Response({'detail': 'Notification not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class NotificationDeleteAllView(APIView):
+    permission_classes = [IsStudent]
+
+    def delete(self, request):
+        student = _student_for_user(request.user)
+        if not student:
+            return Response({'detail': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        deleted, _ = Notification.objects.filter(student=student).delete()
+        return Response({'detail': 'All notifications deleted.', 'deleted': deleted})
+
+
+class NotificationBulkDeleteView(APIView):
+    permission_classes = [IsStudent]
+
+    def post(self, request):
+        student = _student_for_user(request.user)
+        if not student:
+            return Response({'detail': 'Student profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        ids = request.data.get('ids', [])
+        if not isinstance(ids, list):
+            return Response({'detail': 'ids must be a list.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ids = [int(value) for value in ids]
+        except (TypeError, ValueError):
+            return Response({'detail': 'ids must contain only notification IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+        deleted, _ = Notification.objects.filter(student=student, id__in=ids).delete()
+        return Response({'detail': 'Selected notifications deleted.', 'deleted': deleted})
 
 
 # ── Online orders — list + detail (admin & cashier) ──────────────────────────
@@ -744,6 +952,15 @@ class OnlineOrdersView(APIView):
         status_filter = request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+
+        orders_to_mark_received = []
+        received_at = timezone.now()
+        for order in qs:
+            if order.cashier_received_at is None:
+                order.cashier_received_at = received_at
+                orders_to_mark_received.append(order)
+        if orders_to_mark_received:
+            MealOrder.objects.bulk_update(orders_to_mark_received, ['cashier_received_at'])
 
         # Group by session_id; orders without a session are their own group
         sessions = {}
@@ -776,6 +993,10 @@ class OnlineOrdersView(APIView):
                 'student_name':   first.student.full_name if first.student else '',
                 'student_email':  first.student_email,
                 'created_at':     first.created_at,
+                'cashier_received_at': max((o.cashier_received_at for o in orders if o.cashier_received_at), default=None),
+                'confirmed_at':   max((o.confirmed_at for o in orders if o.confirmed_at), default=None),
+                'completed_at':   max((o.completed_at for o in orders if o.completed_at), default=None),
+                'cancelled_at':   max((o.cancelled_at for o in orders if o.cancelled_at), default=None),
                 'delivery_type':  first.delivery_type,
                 'delivery_address': first.delivery_address,
                 'delivery_fee':   str(session_delivery_fee),
@@ -796,6 +1017,10 @@ class OnlineOrdersView(APIView):
                 'student_name':   order.student.full_name if order.student else '',
                 'student_email':  order.student_email,
                 'created_at':     order.created_at,
+                'cashier_received_at': order.cashier_received_at,
+                'confirmed_at':   order.confirmed_at,
+                'completed_at':   order.completed_at,
+                'cancelled_at':   order.cancelled_at,
                 'delivery_type':  order.delivery_type,
                 'delivery_address': order.delivery_address,
                 'delivery_fee':   str(_money(order.delivery_fee)),
@@ -804,10 +1029,24 @@ class OnlineOrdersView(APIView):
                 'orders':         [serialized_order],
             })
 
-        result.sort(key=lambda x: x['created_at'], reverse=True)
+        def sort_time(row):
+            row_status = row.get('status')
+            if row_status == 'pending':
+                return row.get('cashier_received_at') or row.get('created_at')
+            if row_status == 'confirmed':
+                return row.get('confirmed_at') or row.get('created_at')
+            if row_status == 'completed':
+                return row.get('completed_at') or row.get('created_at')
+            if row_status == 'cancelled':
+                return row.get('cancelled_at') or row.get('created_at')
+            return row.get('created_at')
+
+        result.sort(key=sort_time, reverse=True)
         # Serialize datetime for JSON
         for r in result:
             r['created_at'] = r['created_at'].isoformat()
+            for field in ('cashier_received_at', 'confirmed_at', 'completed_at', 'cancelled_at'):
+                r[field] = r[field].isoformat() if r[field] else None
         return Response(result)
 
 
@@ -910,10 +1149,15 @@ class GenerateBillView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        confirmed_at = timezone.now()
         for session_order in session_orders:
             if session_order.status == 'pending':
                 session_order.status = 'confirmed'
-                session_order.save(update_fields=['status'])
+                if not session_order.confirmed_at:
+                    session_order.confirmed_at = confirmed_at
+                    session_order.save(update_fields=['status', 'confirmed_at'])
+                else:
+                    session_order.save(update_fields=['status'])
 
         items_snapshot = []
         subtotal = Decimal('0.00')

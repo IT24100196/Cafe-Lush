@@ -52,7 +52,9 @@ export default function IncomeOutcome() {
   }
 
   const handleDelete = async () => {
-    try { await deleteIncomeOutcome(deleteId) } catch {}
+    try { await deleteIncomeOutcome(deleteId) } catch {
+      // Keep the list refresh below so the UI stays in sync if the item was already removed.
+    }
     setDeleteId(null)
     fetchAll()
   }
@@ -114,6 +116,7 @@ export default function IncomeOutcome() {
                 type="number" step="0.01" min="0.01"
                 placeholder="0.00"
                 value={incomeForm.amount}
+                onWheel={(e) => e.currentTarget.blur()}
                 onChange={e => setIncomeForm({ ...incomeForm, amount: e.target.value })}
               />
             </div>
@@ -165,6 +168,7 @@ export default function IncomeOutcome() {
                 type="number" step="0.01" min="0.01"
                 placeholder="0.00"
                 value={outcomeForm.amount}
+                onWheel={(e) => e.currentTarget.blur()}
                 onChange={e => setOutcomeForm({ ...outcomeForm, amount: e.target.value })}
               />
             </div>

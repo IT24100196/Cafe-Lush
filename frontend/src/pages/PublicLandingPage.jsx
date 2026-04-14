@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { getFeaturedItems } from '../api/endpoints'
 import AutoScrollGallery from '../components/FoodGallery'
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock'
 
 const NAV_LINKS = [
   { label: 'Home', href: '#home' },
@@ -99,7 +100,7 @@ function Navbar() {
   }, [])
 
   return (
-    <nav className={`fixed top-0 inset-x-0 z-50 transition-all duration-300 ${scrolled ? 'bg-brown/95 backdrop-blur-md shadow-lg' : 'bg-transparent'}`}>
+    <nav className={`landing-nav fixed top-0 inset-x-0 z-50 transition-all duration-300 ${scrolled ? 'bg-brown/95 backdrop-blur-md shadow-lg' : 'bg-transparent'}`}>
       <div className="max-w-7xl mx-auto px-4 lg:px-8 flex items-center justify-between h-16 lg:h-20">
         <button onClick={() => scrollTo('home')} className="flex items-center gap-2 text-left">
           <img
@@ -189,49 +190,47 @@ function Hero() {
   }, [])
 
   return (
-    <section id="home" className="relative min-h-screen flex items-center justify-center overflow-hidden">
+    <section id="home" className="landing-hero relative min-h-[92dvh] lg:min-h-[94vh] flex items-center justify-center overflow-hidden pt-16 sm:pt-20 pb-10 sm:pb-0">
       <div
-        className="absolute inset-0"
+        className="landing-hero-bg absolute inset-0"
         style={{
           backgroundImage: 'url(/image/image8.png)',
-          backgroundSize: 'cover',
-          backgroundPosition: 'center center',
-          backgroundRepeat: 'no-repeat',
           backgroundColor: '#050403',
           filter: 'brightness(1.3)',
         }}
       />
-      <div className="absolute inset-0" style={{ background: 'linear-gradient(to right, rgba(0,0,0,0.45) 40%, rgba(0,0,0,0.15) 100%)' }} />
+      <div className="landing-hero-scrim absolute inset-0" />
 
-      <div className={`relative z-10 text-center px-4 max-w-4xl mx-auto transition-all duration-1000 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
-        <p className="font-inter text-gold text-sm font-medium tracking-[0.3em] uppercase mb-4" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.6)' }}>
+      <div className={`landing-hero-content relative z-10 text-center px-5 sm:px-4 max-w-4xl mx-auto transition-all duration-1000 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+        <p className="font-inter text-gold text-xs sm:text-sm font-medium tracking-[0.22em] sm:tracking-[0.3em] uppercase mb-3 sm:mb-4" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.6)' }}>
           Welcome to Cafe Lush
         </p>
-        <h1 className="font-playfair font-black text-cream text-4xl sm:text-5xl lg:text-7xl leading-tight mb-6" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.8)' }}>
+        <h1 className="font-playfair font-black text-cream text-3xl sm:text-5xl lg:text-7xl leading-tight mb-4 sm:mb-6" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.8)' }}>
           Experience Fine Dining
           <br />
           <span className="text-gold">&amp; Memorable Events</span>
         </h1>
-        <p className="font-inter text-cream/70 text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed" style={{ textShadow: '0 2px 8px rgba(0,0,0,0.7)' }}>
+        <p className="font-inter text-cream/75 text-sm sm:text-xl max-w-2xl mx-auto mb-7 sm:mb-10 leading-relaxed" style={{ textShadow: '0 2px 8px rgba(0,0,0,0.7)' }}>
           Fresh meals, seamless ordering, and world-class event management — all in the heart of Jaffna.
         </p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center">
           <Link
             to="/login"
-            className="px-8 py-4 rounded-full bg-gold text-brown font-inter font-bold text-base hover:bg-gold-light transition-all shadow-lg hover:shadow-gold/30 hover:-translate-y-0.5"
+            className="px-6 sm:px-8 py-3 sm:py-4 rounded-full bg-gold text-brown font-inter font-bold text-sm sm:text-base hover:bg-gold-light transition-all shadow-lg hover:shadow-gold/30 hover:-translate-y-0.5"
           >
             Order Your Meal
           </Link>
           <button
             onClick={() => scrollTo('events')}
-            className="px-8 py-4 rounded-full border-2 border-gold/60 text-gold font-inter font-bold text-base hover:bg-gold/10 transition-all hover:-translate-y-0.5"
+            className="px-6 sm:px-8 py-3 sm:py-4 rounded-full border-2 border-gold/60 text-gold font-inter font-bold text-sm sm:text-base hover:bg-gold/10 transition-all hover:-translate-y-0.5"
           >
-            Order Food for Your Event
+            <span className="sm:hidden">Event Catering</span>
+            <span className="hidden sm:inline">Order Food for Your Event</span>
           </button>
         </div>
       </div>
 
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-cream/40">
+      <div className="hidden sm:flex absolute bottom-8 left-1/2 -translate-x-1/2 flex-col items-center gap-2 text-cream/40">
         <span className="font-inter text-xs tracking-widest uppercase">Scroll</span>
         <div className="w-px h-8 bg-gradient-to-b from-cream/40 to-transparent animate-pulse" />
       </div>
@@ -339,14 +338,11 @@ function Events() {
   const [showDetails, setShowDetails] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
 
+  useBodyScrollLock(showDetails)
+
   useEffect(() => {
     const t = setTimeout(() => setModalVisible(showDetails), showDetails ? 10 : 0)
     return () => clearTimeout(t)
-  }, [showDetails])
-
-  useEffect(() => {
-    document.body.classList.toggle('overflow-hidden', showDetails)
-    return () => document.body.classList.remove('overflow-hidden')
   }, [showDetails])
 
   return (

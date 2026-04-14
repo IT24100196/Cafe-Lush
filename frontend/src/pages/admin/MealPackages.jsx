@@ -353,6 +353,7 @@ export default function MealPackages() {
                 min="0.01"
                 step="0.01"
                 value={editPrice}
+                onWheel={(e) => e.currentTarget.blur()}
                 onChange={e => setEditPrice(e.target.value)}
               />
             </div>

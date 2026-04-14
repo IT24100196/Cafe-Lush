@@ -159,7 +159,7 @@ export default function EventsManagement() {
               </div>
               <div>
                 <label className="ad-field-label">Total Amount (₱)</label>
-                <input className="ad-input" type="number" step="0.01" min="0" value={form.total_amount} onChange={(e) => setForm({ ...form, total_amount: e.target.value })} required />
+                <input className="ad-input" type="number" step="0.01" min="0" value={form.total_amount} onWheel={(e) => e.currentTarget.blur()} onChange={(e) => setForm({ ...form, total_amount: e.target.value })} required />
               </div>
               <div className="col-span-2">
                 <label className="ad-field-label">Venue</label>

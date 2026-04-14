@@ -2,11 +2,14 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     MealTypeViewSet, MealPackageViewSet, MealOrderView, MealOrderBatchView, MealOrderStatusView,
+    MealOrderSessionStatusView,
     StudentOrderCancelView,
-    NotificationView, PosItemsForPackageView, StudentItemsView,
+    NotificationView, NotificationReadAllView, NotificationDetailView,
+    NotificationDeleteAllView, NotificationBulkDeleteView,
+    PosItemsForPackageView, StudentItemsView,
     OnlineOrdersView, OnlineOrderDetailView, GenerateBillView, WalkInBillView,
     WalkInBillListView, BillDetailView, BillPrintView, BillPdfView, SendBillEmailView,
-    SuggestionView, ClearOrderHistoryView, DeliveryFeeEstimateView,
+    SuggestionView, ClearOrderHistoryView, DeliveryAreaListView, DeliveryFeeEstimateView,
 )
 
 router = DefaultRouter()
@@ -18,10 +21,17 @@ urlpatterns = [
     path('orders/',                       MealOrderView.as_view()),
     path('orders/clear/',                 ClearOrderHistoryView.as_view()),
     path('orders/batch/',                 MealOrderBatchView.as_view()),
+    path('orders/delivery-areas/',        DeliveryAreaListView.as_view()),
     path('orders/delivery-fee/',          DeliveryFeeEstimateView.as_view()),
     path('orders/<int:pk>/cancel/',       StudentOrderCancelView.as_view()),
+    path('orders/session/<str:session_id>/status/', MealOrderSessionStatusView.as_view()),
     path('orders/<int:pk>/status/',       MealOrderStatusView.as_view()),
     path('notifications/',                NotificationView.as_view()),
+    path('notifications/read-all/',       NotificationReadAllView.as_view()),
+    path('notifications/delete-all/',     NotificationDeleteAllView.as_view()),
+    path('notifications/bulk-delete/',    NotificationBulkDeleteView.as_view()),
+    path('notifications/<int:pk>/read/',  NotificationDetailView.as_view()),
+    path('notifications/<int:pk>/',       NotificationDetailView.as_view()),
     path('package-items/',                PosItemsForPackageView.as_view()),
     path('student-items/',                StudentItemsView.as_view()),
     path('suggestions/',                  SuggestionView.as_view()),

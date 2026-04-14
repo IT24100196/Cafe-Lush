@@ -8,6 +8,7 @@ from .delivery import (
     LOCATION_SOURCE_CURRENT,
     build_delivery_address,
     normalize_coordinate,
+    resolve_delivery_area,
 )
 from .order_reference import build_order_reference, build_walkin_order_reference
 from .models import MealType, MealOrder, Student, Notification, MealPackage, Bill, Suggestion
@@ -17,6 +18,7 @@ PACKAGE_READY_TIMES = {
     'breakfast': '07:30 AM',
     'dinner': '07:00 PM',
 }
+MAX_PACKAGE_QUANTITY = 10
 
 
 def get_package_ready_time(meal_type):
@@ -57,9 +59,60 @@ class StudentSerializer(serializers.ModelSerializer):
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    order_detail = serializers.SerializerMethodField()
+
     class Meta:
         model  = Notification
-        fields = ['id', 'message', 'is_read', 'created_at', 'order']
+        fields = ['id', 'message', 'is_read', 'created_at', 'order', 'order_detail']
+
+    def get_order_detail(self, obj):
+        order = obj.order
+        if not order:
+            return None
+
+        if order.order_type == 'item':
+            order_name = order.item.name if order.item else 'Menu item'
+            order_label = order_name
+            order_kind = 'Menu item'
+            pickup_time = None
+            unit_price = order.item.price if order.item else 0
+        else:
+            meal_name = order.meal_type.name if order.meal_type else 'Meal package'
+            if order.preference == 'veg':
+                order_label = f'Veg {meal_name}'
+            elif order.preference == 'non-veg':
+                order_label = f'Non-Veg {meal_name}'
+            else:
+                order_label = meal_name
+            order_name = meal_name
+            order_kind = 'Meal package'
+            pickup_time = get_package_ready_time(order.meal_type)
+            unit_price = order.meal_type.price if order.meal_type and hasattr(order.meal_type, 'price') else 0
+
+        bill = getattr(order, 'bill', None)
+        cache = self.context.setdefault('_order_reference_cache', {})
+
+        return {
+            'id': order.id,
+            'order_reference': build_order_reference(order, cache=cache),
+            'bill_number': bill.bill_number if bill else '',
+            'status': order.status,
+            'order_type': order.order_type,
+            'order_kind': order_kind,
+            'name': order_name,
+            'label': order_label,
+            'quantity': order.quantity,
+            'order_date': order.order_date,
+            'preference': order.preference,
+            'delivery_type': order.delivery_type,
+            'delivery_address': order.delivery_address,
+            'phone_number': order.phone_number,
+            'student_email': order.student_email,
+            'delivery_fee': order.delivery_fee,
+            'unit_price': unit_price,
+            'pickup_time': pickup_time,
+            'created_at': order.created_at,
+        }
 
 
 class MealOrderSerializer(serializers.ModelSerializer):
@@ -80,8 +133,12 @@ class MealOrderSerializer(serializers.ModelSerializer):
                   'address_line_1', 'address_line_2', 'city_area', 'location_source',
                   'delivery_latitude', 'delivery_longitude', 'delivery_fee', 'phone_number',
                   'student_email', 'status', 'session_id', 'order_reference', 'bill_number', 'pickup_time',
-                  'package_label', 'unit_price', 'created_at']
-        read_only_fields = ['student', 'status', 'session_id', 'created_at']
+                  'package_label', 'unit_price', 'cashier_received_at', 'confirmed_at',
+                  'completed_at', 'cancelled_at', 'created_at']
+        read_only_fields = [
+            'student', 'status', 'session_id', 'cashier_received_at',
+            'confirmed_at', 'completed_at', 'cancelled_at', 'created_at',
+        ]
         extra_kwargs = {
             'student_email': {'required': False},
             'meal_type':     {'required': False, 'allow_null': True},
@@ -110,6 +167,7 @@ class MealOrderSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         order_type = data.get('order_type', 'package')
+        quantity = data.get('quantity')
         phone_number = (data.get('phone_number') or '').strip()
         delivery_type = (data.get('delivery_type') or 'takeaway').strip().lower()
         address_line_1 = (data.get('address_line_1') or '').strip()
@@ -132,7 +190,15 @@ class MealOrderSerializer(serializers.ModelSerializer):
             if not address_line_1:
                 raise serializers.ValidationError({'address_line_1': 'Address line 1 is required for delivery orders.'})
             if not city_area:
-                raise serializers.ValidationError({'city_area': 'City or area is required for delivery orders.'})
+                raise serializers.ValidationError({'city_area': 'Delivery area is required for delivery orders.'})
+            try:
+                area = resolve_delivery_area(city_area=city_area)
+            except DjangoValidationError as exc:
+                message = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
+                raise serializers.ValidationError({'city_area': message})
+            if city_area.strip().lower() != 'jaffna':
+                city_area = area['name']
+            data['city_area'] = city_area
             delivery_address = build_delivery_address(address_line_1, address_line_2, city_area)
             if location_source == LOCATION_SOURCE_CURRENT and (delivery_latitude is None or delivery_longitude is None):
                 raise serializers.ValidationError({'detail': 'Current location is required to calculate the delivery fee.'})
@@ -161,6 +227,10 @@ class MealOrderSerializer(serializers.ModelSerializer):
         else:
             if not data.get('meal_type'):
                 raise serializers.ValidationError({'meal_type': 'A meal type is required for package orders.'})
+            if quantity is not None and quantity > MAX_PACKAGE_QUANTITY:
+                raise serializers.ValidationError({
+                    'quantity': f'Maximum {MAX_PACKAGE_QUANTITY} packages can be ordered at one time.'
+                })
             if not phone_number:
                 raise serializers.ValidationError({'phone_number': 'A phone number is required for package orders.'})
             if delivery_type == 'delivery' and not delivery_address:

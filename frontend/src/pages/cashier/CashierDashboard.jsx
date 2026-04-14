@@ -1,27 +1,39 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { useAuth } from '../../context/AuthContext'
-import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getItems, getCategories, updateOrderStatus } from '../../api/endpoints'
+import { createPortal } from 'react-dom'
+import { useAuth } from '../../context/authContextCore'
+import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getItems, getCategories, updateOrderStatus, updateOrderSessionStatus } from '../../api/endpoints'
 import { Spinner, EmptyState } from '../../components/UI'
 import { useOrderSocket } from '../../hooks/useOrderSocket'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 import { useReactToPrint } from 'react-to-print'
 import PrintBillView from './PrintBillView'
 import PrintWalkinBill from './PrintWalkinBill'
 import './CashierDashboard.css'
 
 // ── Confirm Dialog ────────────────────────────────────────────────────────────
-function ConfirmDialog({ message, onConfirm, onCancel }) {
-  return (
+function ConfirmDialog({
+  title = 'Clear Confirmation',
+  message,
+  confirmLabel = 'Yes, Clear',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+}) {
+  useBodyScrollLock()
+
+  return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div style={{ background: '#fff', borderRadius: '12px', padding: '28px 32px', maxWidth: '360px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', textAlign: 'center' }}>
         <div style={{ fontSize: '32px', marginBottom: '12px' }}>🗑️</div>
-        <div style={{ fontWeight: 700, fontSize: '15px', color: '#2C1A0E', marginBottom: '8px' }}>Clear Confirmation</div>
+        <div style={{ fontWeight: 700, fontSize: '15px', color: '#2C1A0E', marginBottom: '8px' }}>{title}</div>
         <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '24px' }}>{message}</div>
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-          <button onClick={onCancel} style={{ padding: '8px 22px', borderRadius: '7px', border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-          <button onClick={onConfirm} style={{ padding: '8px 22px', borderRadius: '7px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>Yes, Clear</button>
+          <button onClick={onCancel} style={{ padding: '8px 22px', borderRadius: '7px', border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}>{cancelLabel}</button>
+          <button onClick={onConfirm} style={{ padding: '8px 22px', borderRadius: '7px', border: 'none', background: '#ef4444', color: '#fff', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>{confirmLabel}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -33,6 +45,15 @@ function formatToastTime(value) {
   const stamp = value ? new Date(value) : new Date()
   if (Number.isNaN(stamp.getTime())) return ''
   return stamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatLocalDateKey(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function buildOrderToast(source = {}) {
@@ -349,6 +370,40 @@ function getOnlineSessionStatus(session) {
   return session.status || 'pending'
 }
 
+function latestTimestamp(...values) {
+  return values
+    .filter(Boolean)
+    .map((value) => {
+      const time = new Date(value).getTime()
+      return Number.isFinite(time) ? time : 0
+    })
+    .reduce((latest, time) => Math.max(latest, time), 0)
+}
+
+function getLatestOrderTimestamp(session, field) {
+  return latestTimestamp(...(session.orders || []).map((order) => order[field]))
+}
+
+function getOnlineSessionSortTimestamp(session) {
+  if (session.status === 'pending') {
+    return latestTimestamp(
+      session.cashier_received_at,
+      getLatestOrderTimestamp(session, 'cashier_received_at'),
+      session.created_at,
+    )
+  }
+  if (session.status === 'confirmed') {
+    return latestTimestamp(session.confirmed_at, getLatestOrderTimestamp(session, 'confirmed_at'))
+  }
+  if (session.status === 'completed') {
+    return latestTimestamp(session.completed_at, getLatestOrderTimestamp(session, 'completed_at'))
+  }
+  if (session.status === 'cancelled') {
+    return latestTimestamp(session.cancelled_at, getLatestOrderTimestamp(session, 'cancelled_at'))
+  }
+  return latestTimestamp(session.created_at)
+}
+
 function getOnlineOrderLabel(order) {
   return order.package_label || (order.order_type === 'item' ? order.item_name : order.meal_type_name) || 'Order item'
 }
@@ -372,6 +427,13 @@ const PREP_GROUPS = [
   { key: 'dinner_veg', label: 'Dinner Veg', ready: '7:00 PM' },
   { key: 'dinner_nonveg', label: 'Dinner Non-Veg', ready: '7:00 PM' },
   { key: 'weekend_lunch', label: 'Weekend Lunch', ready: 'Lunch time' },
+]
+
+const PREP_ALLOWED_STATUSES = new Set(['pending', 'confirmed'])
+const PREP_STATUS_FILTERS = [
+  { key: 'all', label: 'All Statuses' },
+  { key: 'pending', label: 'Pending' },
+  { key: 'confirmed', label: 'Confirmed' },
 ]
 
 function toDateInputValue(date = new Date()) {
@@ -399,12 +461,17 @@ function getPackagePrepKey(order) {
   return ''
 }
 
-function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly) {
+function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly, statusFilter = 'all') {
   const groups = PREP_GROUPS.reduce((acc, group) => ({ ...acc, [group.key]: [] }), {})
 
   orders.forEach((session) => {
     const sessionOrders = session.orders || []
-    const packageOrders = sessionOrders.filter((order) => order.order_type === 'package' && order.status === 'confirmed')
+    const packageOrders = sessionOrders.filter((order) => {
+      const status = String(order.status || session.status || 'pending').toLowerCase()
+      return order.order_type === 'package'
+        && PREP_ALLOWED_STATUSES.has(status)
+        && (statusFilter === 'all' || status === statusFilter)
+    })
     const menuItems = sessionOrders.filter((order) => order.order_type === 'item')
     const hasMenuItems = menuItems.length > 0
 
@@ -415,6 +482,7 @@ function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly) {
       if (pkg.order_date !== prepDate) return
       const key = getPackagePrepKey(pkg)
       if (!key || !groups[key]) return
+      const status = String(pkg.status || session.status || 'pending').toLowerCase()
 
       groups[key].push({
         id: pkg.id,
@@ -429,6 +497,7 @@ function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly) {
         meal_type_name: pkg.meal_type_name,
         preference: pkg.preference,
         quantity: Number(pkg.quantity || 1),
+        status,
         has_menu_items: hasMenuItems,
         menu_items: menuItems,
       })
@@ -445,8 +514,8 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
   const [cancelling,   setCancelling]   = useState(null)
   const [completing,   setCompleting]   = useState(null)
   const [printBillId,  setPrintBillId]  = useState(null)
-  const [printAnchor,  setPrintAnchor]  = useState(null)
   const [showConfirm,  setShowConfirm]  = useState(false)
+  const [rejectTarget, setRejectTarget] = useState(null)
   const [hiddenKeys,   setHiddenKeys]   = useState(getHidden)
   const [statusFilter, setStatusFilter] = useState('all')
   const [typeFilter,   setTypeFilter]   = useState('all')
@@ -463,18 +532,42 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
+  const updateOnlineSessionStatus = async (session, nextStatus) => {
+    if (session.session_id) {
+      const { data } = await updateOrderSessionStatus(session.session_id, nextStatus)
+      return Array.isArray(data) ? data : []
+    }
+    const updatedResponses = await Promise.all(session.orders.map((o) => updateOrderStatus(o.id, nextStatus)))
+    return updatedResponses.map(({ data }) => data)
+  }
+
   // Confirm all orders in a session → sends notification to student
-  const handleConfirm = async (session) => {
+  const handleConfirm = async (session, anchorEl) => {
     const key = session.session_id || session.orders[0]?.id
     setConfirming(key)
     try {
-      await Promise.all(session.orders.map((o) => updateOrderStatus(o.id, 'confirmed')))
+      const updatedOrdersData = await updateOnlineSessionStatus(session, 'confirmed')
+      const updatedById = new Map(updatedOrdersData.map((data) => [data.id, data]))
+      const confirmedSession = {
+        ...session,
+        status: 'confirmed',
+        orders: session.orders.map((o) => ({ ...o, ...(updatedById.get(o.id) || {}), status: 'confirmed' })),
+      }
       setOrders((prev) => prev.map((s) => {
         if ((session.session_id && s.session_id === session.session_id) || s === session) {
-          return { ...s, status: 'confirmed', orders: s.orders.map((o) => ({ ...o, status: 'confirmed' })) }
+          const updatedOrders = s.orders.map((o) => ({ ...o, ...(updatedById.get(o.id) || {}), status: 'confirmed' }))
+          return {
+            ...s,
+            status: 'confirmed',
+            confirmed_at: latestTimestamp(...updatedOrders.map((o) => o.confirmed_at))
+              ? updatedOrders.find((o) => o.confirmed_at)?.confirmed_at || s.confirmed_at
+              : s.confirmed_at,
+            orders: updatedOrders,
+          }
         }
         return s
       }))
+      await handleGenerateBill(confirmedSession, anchorEl)
     } catch (err) {
       alert(err.response?.data?.detail || 'Failed to confirm order.')
     } finally { setConfirming(null) }
@@ -485,10 +578,17 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
     const key = session.session_id || session.orders[0]?.id
     setCancelling(key)
     try {
-      await Promise.all(session.orders.map((o) => updateOrderStatus(o.id, 'cancelled')))
+      const updatedOrdersData = await updateOnlineSessionStatus(session, 'cancelled')
+      const updatedById = new Map(updatedOrdersData.map((data) => [data.id, data]))
       setOrders((prev) => prev.map((s) => {
         if ((session.session_id && s.session_id === session.session_id) || s === session) {
-          return { ...s, status: 'cancelled', orders: s.orders.map((o) => ({ ...o, status: 'cancelled' })) }
+          const updatedOrders = s.orders.map((o) => ({ ...o, ...(updatedById.get(o.id) || {}), status: 'cancelled' }))
+          return {
+            ...s,
+            status: 'cancelled',
+            cancelled_at: updatedOrders.find((o) => o.cancelled_at)?.cancelled_at || s.cancelled_at,
+            orders: updatedOrders,
+          }
         }
         return s
       }))
@@ -497,14 +597,32 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
     } finally { setCancelling(null) }
   }
 
+  const handleRejectClick = (session) => {
+    setRejectTarget(session)
+  }
+
+  const handleConfirmReject = async () => {
+    if (!rejectTarget) return
+    const session = rejectTarget
+    setRejectTarget(null)
+    await handleCancel(session)
+  }
+
   const handleComplete = async (session) => {
     const key = session.session_id || session.orders[0]?.id
     setCompleting(key)
     try {
-      await Promise.all(session.orders.map((o) => updateOrderStatus(o.id, 'completed')))
+      const updatedOrdersData = await updateOnlineSessionStatus(session, 'completed')
+      const updatedById = new Map(updatedOrdersData.map((data) => [data.id, data]))
       setOrders((prev) => prev.map((s) => {
         if ((session.session_id && s.session_id === session.session_id) || s === session) {
-          return { ...s, status: 'completed', orders: s.orders.map((o) => ({ ...o, status: 'completed' })) }
+          const updatedOrders = s.orders.map((o) => ({ ...o, ...(updatedById.get(o.id) || {}), status: 'completed' }))
+          return {
+            ...s,
+            status: 'completed',
+            completed_at: updatedOrders.find((o) => o.completed_at)?.completed_at || s.completed_at,
+            orders: updatedOrders,
+          }
         }
         return s
       }))
@@ -514,18 +632,9 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
   }
 
   // Generate bill (only for confirmed sessions)
-  const handleGenerateBill = async (session, anchorEl) => {
+  const handleGenerateBill = async (session) => {
     const firstOrderId = session.orders[0]?.id
     if (!firstOrderId) return
-    if (anchorEl?.getBoundingClientRect) {
-      const rect = anchorEl.getBoundingClientRect()
-      setPrintAnchor({
-        top: rect.top,
-        height: rect.height,
-      })
-    } else {
-      setPrintAnchor(null)
-    }
     setGenerating(session.session_id || firstOrderId)
     try {
       const { data } = await generateOnlineBill(firstOrderId)
@@ -543,7 +652,6 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       }))
       setPrintBillId(data.id)
     } catch (err) {
-      setPrintAnchor(null)
       alert(err.response?.data?.detail || 'Failed to generate bill.')
     } finally { setGenerating(null) }
   }
@@ -565,6 +673,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       }))
       .filter((session) => statusFilter === 'all' || session.status === statusFilter)
       .filter((session) => typeFilter === 'all' || session.orderGroup === typeFilter)
+      .sort((a, b) => getOnlineSessionSortTimestamp(b) - getOnlineSessionSortTimestamp(a))
   }, [orders, hiddenKeys, statusFilter, typeFilter])
 
   const groupedOrders = useMemo(() => {
@@ -683,18 +792,18 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
             )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '7px', flexShrink: 0, minWidth: '132px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '7px', flexShrink: 0, minWidth: '154px' }}>
             {session.status === 'pending' && (
               <>
                 <button
-                  onClick={() => handleConfirm(session)}
+                  onClick={(e) => handleConfirm(session, e.currentTarget)}
                   disabled={busy}
-                  style={{ background: 'var(--forest)', color: '#fff', border: 'none', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}
+                  style={{ background: 'var(--forest)', color: '#fff', border: 'none', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1 }}
                 >
-                  {confirming === genKey ? 'Confirming...' : 'Confirm'}
+                  {confirming === genKey ? 'Confirming...' : generating === genKey ? 'Opening Bill...' : 'Confirm & Print Bill'}
                 </button>
                 <button
-                  onClick={() => handleCancel(session)}
+                  onClick={() => handleRejectClick(session)}
                   disabled={busy}
                   style={{ background: '#fef2f2', color: '#991b1b', border: '1.5px solid #fca5a5', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}
                 >
@@ -706,10 +815,10 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
               <>
                 <button
                   onClick={(e) => handleGenerateBill(session, e.currentTarget)}
-                  disabled={generating === genKey || Boolean(billNumber)}
-                  style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #93c5fd', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: billNumber ? 'default' : 'pointer', opacity: generating === genKey ? 0.6 : 1 }}
+                  disabled={generating === genKey}
+                  style={{ background: '#eff6ff', color: '#1d4ed8', border: '1.5px solid #93c5fd', borderRadius: '6px', padding: '7px 12px', fontSize: '12px', fontWeight: 800, cursor: generating === genKey ? 'not-allowed' : 'pointer', opacity: generating === genKey ? 0.6 : 1 }}
                 >
-                  {billNumber ? 'Bill Ready' : generating === genKey ? 'Generating...' : 'Generate Bill'}
+                  {generating === genKey ? 'Opening...' : billNumber ? 'Print Bill' : 'Generate Bill'}
                 </button>
                 <button
                   onClick={() => handleComplete(session)}
@@ -750,6 +859,16 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
             setNewBadge(0)
           }}
           onCancel={() => setShowConfirm(false)}
+        />
+      )}
+      {rejectTarget && (
+        <ConfirmDialog
+          title="Reject order?"
+          message={`Are you sure you want to reject ${rejectTarget.student_name || 'this student'}'s order? This will notify the student that the order was cancelled.`}
+          confirmLabel="Yes, Reject"
+          cancelLabel="No, Keep"
+          onConfirm={handleConfirmReject}
+          onCancel={() => setRejectTarget(null)}
         />
       )}
       <div className="cd-history-topbar">
@@ -875,10 +994,8 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       {printBillId && (
         <PrintBillView
           billId={printBillId}
-          anchorRect={printAnchor}
           onClose={() => {
             setPrintBillId(null)
-            setPrintAnchor(null)
           }}
         />
       )}
@@ -890,6 +1007,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
 function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
   const [prepDate, setPrepDate] = useState(toDateInputValue())
   const [methodFilter, setMethodFilter] = useState('all')
+  const [prepStatusFilter, setPrepStatusFilter] = useState('all')
   const [combinedOnly, setCombinedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -909,8 +1027,8 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
   useEffect(() => { refreshOrders() }, [refreshOrders])
 
   const prepGroups = useMemo(
-    () => buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly),
-    [orders, prepDate, methodFilter, combinedOnly],
+    () => buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly, prepStatusFilter),
+    [orders, prepDate, methodFilter, combinedOnly, prepStatusFilter],
   )
 
   const totals = useMemo(() => {
@@ -925,15 +1043,20 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
   }, [prepGroups])
 
   const hasRows = totals.all > 0
+  const prepStatusSummary = prepStatusFilter === 'all'
+    ? 'Pending + confirmed'
+    : prepStatusFilter === 'pending'
+      ? 'Pending only'
+      : 'Confirmed only'
 
   return (
     <div className="cd-history-col cd-panel-anim">
       <div className="cd-history-topbar">
         <div>
           <div className="cd-history-heading">Meal Package Prep</div>
-          <div className="cd-history-subheading">Confirmed packages to prepare by meal, preference, method, and date</div>
+          <div className="cd-history-subheading">Pending and confirmed packages by meal, preference, method, and date</div>
         </div>
-        <button className="cd-btn-clear" onClick={refreshOrders} disabled={loading}>
+        <button className="cd-btn-refresh" onClick={refreshOrders} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
@@ -973,6 +1096,25 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
               {filter.label}
             </button>
           ))}
+          {PREP_STATUS_FILTERS.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setPrepStatusFilter(filter.key)}
+              style={{
+                border: prepStatusFilter === filter.key ? '1.5px solid #92400e' : '1.5px solid #e5e7eb',
+                background: prepStatusFilter === filter.key ? '#fffbeb' : '#fff',
+                color: prepStatusFilter === filter.key ? '#92400e' : '#6b7280',
+                borderRadius: '8px',
+                padding: '8px 11px',
+                fontSize: '12px',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              {filter.label}
+            </button>
+          ))}
           <button
             type="button"
             onClick={() => setCombinedOnly((value) => !value)}
@@ -993,7 +1135,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
-        {[...PREP_GROUPS, { key: 'all', label: 'Total Packages', ready: 'All confirmed' }].map((group) => (
+        {[...PREP_GROUPS, { key: 'all', label: 'Total Packages', ready: prepStatusSummary }].map((group) => (
           <div key={group.key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
             <div style={{ fontSize: '22px', fontWeight: 900, color: group.key === 'all' ? 'var(--forest)' : 'var(--espresso)', lineHeight: 1 }}>
               {totals[group.key] || 0}
@@ -1009,7 +1151,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
       ) : !hasRows ? (
         <div className="cd-history-empty">
           <div className="cd-history-empty-icon">📭</div>
-          No confirmed meal packages match these prep filters.
+          No pending or confirmed meal packages match these prep filters.
         </div>
       ) : (
         <div className="cd-history-list">
@@ -1021,18 +1163,23 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ fontWeight: 900, color: 'var(--espresso)', fontSize: '14px' }}>{group.label}</div>
                   <div style={{ fontSize: '12px', fontWeight: 900, color: '#166534' }}>
-                    {totals[group.key]} package{totals[group.key] === 1 ? '' : 's'} · Ready {group.ready}
+                    {totals[group.key]} package{totals[group.key] === 1 ? '' : 's'} · {prepStatusSummary} · Ready {group.ready}
                   </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {rows.map((row) => (
-                    <article key={`${group.key}-${row.id}`} className="cd-hbill-card" style={{ borderLeft: '3px solid #6ee7b7' }}>
+                  {rows.map((row) => {
+                    const isPending = row.status === 'pending'
+                    return (
+                    <article key={`${group.key}-${row.id}`} className="cd-hbill-card" style={{ borderLeft: `3px solid ${isPending ? '#fbbf24' : '#6ee7b7'}` }}>
                       <div style={{ padding: '14px 16px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '5px' }}>
                               <strong style={{ fontSize: '13px', color: 'var(--espresso)' }}>{row.order_reference}</strong>
+                              <span style={{ fontSize: '10px', fontWeight: 900, padding: '2px 8px', borderRadius: '999px', background: isPending ? '#fffbeb' : '#ecfdf5', color: isPending ? '#92400e' : '#065f46', border: `1px solid ${isPending ? '#fcd34d' : '#6ee7b7'}` }}>
+                                {isPending ? 'Pending' : 'Confirmed'}
+                              </span>
                               <span style={{ fontSize: '10px', fontWeight: 900, padding: '2px 8px', borderRadius: '999px', background: row.delivery_type === 'delivery' ? '#eff6ff' : '#f8fafc', color: row.delivery_type === 'delivery' ? '#1d4ed8' : '#475569', border: '1px solid #cbd5e1' }}>
                                 {row.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'}
                               </span>
@@ -1055,8 +1202,10 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
                             )}
                           </div>
                           <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                            <div style={{ fontSize: '22px', fontWeight: 900, color: 'var(--forest)', lineHeight: 1 }}>{row.quantity}</div>
-                            <div style={{ fontSize: '10px', color: '#166534', fontWeight: 900, marginTop: '4px' }}>Prepare</div>
+                            <div style={{ fontSize: '22px', fontWeight: 900, color: isPending ? '#92400e' : 'var(--forest)', lineHeight: 1 }}>{row.quantity}</div>
+                            <div style={{ fontSize: '10px', color: isPending ? '#92400e' : '#166534', fontWeight: 900, marginTop: '4px' }}>
+                              {isPending ? 'Waiting Confirm' : 'Prepare'}
+                            </div>
                           </div>
                         </div>
 
@@ -1074,7 +1223,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
                         )}
                       </div>
                     </article>
-                  ))}
+                  )})}
                 </div>
               </section>
             )
@@ -1086,6 +1235,8 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
 }
 
 function CheckoutConfirmModal({ billLines, totalAmount, customerName, onCustomerNameChange, submitting, onConfirm, onCancel }) {
+  useBodyScrollLock()
+
   const itemCount = billLines.reduce((sum, line) => sum + line.qty, 0)
 
   return (
@@ -1213,6 +1364,7 @@ function WalkinSaleTab({ onBillCreated }) {
   const [submitting,  setSubmitting]  = useState(false)
   const [error,       setError]       = useState('')
   const [printBill,   setPrintBill]   = useState(null)
+  const [pendingRemoveLine, setPendingRemoveLine] = useState(null)
 
   // Load menu items + categories once
   useEffect(() => {
@@ -1259,10 +1411,25 @@ function WalkinSaleTab({ onBillCreated }) {
     setBill((prev) => { const { [itemId]: _, ...rest } = prev; return rest })
   }
 
+  const decreaseLineQty = (item, qty) => {
+    if (qty > 1) {
+      setQty(item.id, qty - 1)
+      return
+    }
+    setPendingRemoveLine(item)
+  }
+
+  const confirmRemoveLine = () => {
+    if (!pendingRemoveLine) return
+    removeLine(pendingRemoveLine.id)
+    setPendingRemoveLine(null)
+  }
+
   const clearBill = () => {
     setBill({})
     setCustomerName('')
     setError('')
+    setPendingRemoveLine(null)
   }
 
   // Open confirmation modal
@@ -1384,7 +1551,7 @@ function WalkinSaleTab({ onBillCreated }) {
                   <div className="cd-bill-row-name">{item.name}</div>
                   <div className="cd-bill-row-qty-line">Rs.{parseFloat(item.price).toFixed(2)} each</div>
                   <div className="cd-bill-qty-controls">
-                    <button className="cd-bill-qty-btn" onClick={() => qty > 1 ? setQty(item.id, qty - 1) : removeLine(item.id)}>−</button>
+                    <button className="cd-bill-qty-btn" onClick={() => decreaseLineQty(item, qty)}>−</button>
                     <span className="cd-bill-qty-num">{qty}</span>
                     <button className="cd-bill-qty-btn" onClick={() => setQty(item.id, qty + 1)}>+</button>
                   </div>
@@ -1439,6 +1606,16 @@ function WalkinSaleTab({ onBillCreated }) {
           onCancel={() => setShowCheckout(false)}
         />
       )}
+      {pendingRemoveLine && (
+        <ConfirmDialog
+          title="Remove item?"
+          message={`Do you want to remove ${pendingRemoveLine.name} from the bill?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemoveLine}
+          onCancel={() => setPendingRemoveLine(null)}
+        />
+      )}
     </>
   )
 }
@@ -1447,7 +1624,7 @@ function WalkinSaleTab({ onBillCreated }) {
 export default function CashierDashboard() {
   const { user, logout } = useAuth()
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = formatLocalDateKey()
 
   const [activeTab,      setActiveTab]      = useState('pos')
   const [historyDate,    setHistoryDate]    = useState(today)
@@ -1538,6 +1715,7 @@ export default function CashierDashboard() {
         quantity: first.quantity || 1,
         delivery_type: s.delivery_type || first.delivery_type || 'takeaway',
         created_at: s.created_at || first.created_at || new Date().toISOString(),
+        cashier_received_at: s.cashier_received_at || first.cashier_received_at || new Date().toISOString(),
       }
 
       markSessionAsSeen(key)
@@ -1637,7 +1815,8 @@ export default function CashierDashboard() {
               order_reference: s.order_reference || order.order_reference || '-',
               bill_number: s.bill_number || order.bill_number || '',
               delivery_fee: s.delivery_fee ?? order.delivery_fee ?? '0.00',
-              orders: [...s.orders, order],
+              cashier_received_at: s.cashier_received_at || order.cashier_received_at || new Date().toISOString(),
+              orders: [...s.orders, { ...order, cashier_received_at: order.cashier_received_at || new Date().toISOString() }],
             }
             : s
           )
@@ -1646,7 +1825,9 @@ export default function CashierDashboard() {
           order_reference: order.order_reference || '-',
           bill_number: order.bill_number || '',
           created_at: order.created_at, delivery_type: order.delivery_type, delivery_address: order.delivery_address,
-          delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
+          cashier_received_at: order.cashier_received_at || new Date().toISOString(),
+          delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status,
+          orders: [{ ...order, cashier_received_at: order.cashier_received_at || new Date().toISOString() }] }, ...prev]
       }
       // No session — standalone
       if (prev.find((s) => !s.session_id && s.orders[0]?.id === order.id)) return prev
@@ -1654,7 +1835,9 @@ export default function CashierDashboard() {
         order_reference: order.order_reference || '-',
         bill_number: order.bill_number || '',
         created_at: order.created_at, delivery_type: order.delivery_type, delivery_address: order.delivery_address,
-        delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status, orders: [order] }, ...prev]
+        cashier_received_at: order.cashier_received_at || new Date().toISOString(),
+        delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status,
+        orders: [{ ...order, cashier_received_at: order.cashier_received_at || new Date().toISOString() }] }, ...prev]
     })
     if (isNewSession) {
       markSessionAsSeen(key)
@@ -1673,6 +1856,10 @@ export default function CashierDashboard() {
       delivery_fee: s.orders.some((o) => o.id === order.id) ? (order.delivery_fee ?? s.delivery_fee ?? '0.00') : s.delivery_fee,
       orders: s.orders.map((o) => o.id === order.id ? { ...o, ...order } : o),
       status: s.orders.some((o) => o.id === order.id) ? order.status : s.status,
+      cashier_received_at: order.cashier_received_at || s.cashier_received_at,
+      confirmed_at: order.confirmed_at || s.confirmed_at,
+      completed_at: order.completed_at || s.completed_at,
+      cancelled_at: order.cancelled_at || s.cancelled_at,
     })))
   }, [])
 
@@ -1692,7 +1879,7 @@ export default function CashierDashboard() {
       ])
       // Normalize walk-in Bills into the same shape as PosOrder
       const walkInNormalized = billsRes.data
-        .filter((b) => new Date(b.generated_at).toISOString().split('T')[0] === date)
+        .filter((b) => formatLocalDateKey(b.generated_at) === date)
         .map((b) => ({
           id:           `bill-${b.id}`,
           bill_id:      b.bill_number,

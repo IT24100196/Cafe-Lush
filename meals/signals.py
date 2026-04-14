@@ -40,6 +40,10 @@ def _order_payload(order):
         'bill_number':    order.bill.bill_number if hasattr(order, 'bill') else '',
         'order_date':     str(order.order_date),
         'created_at':     order.created_at.isoformat(),
+        'cashier_received_at': order.cashier_received_at.isoformat() if order.cashier_received_at else None,
+        'confirmed_at':   order.confirmed_at.isoformat() if order.confirmed_at else None,
+        'completed_at':   order.completed_at.isoformat() if order.completed_at else None,
+        'cancelled_at':   order.cancelled_at.isoformat() if order.cancelled_at else None,
     }
 
 

@@ -68,6 +68,10 @@ class MealOrder(models.Model):
     session_id       = models.CharField(max_length=36, blank=True, default='', db_index=True)
     preference       = models.CharField(max_length=10, blank=True, default='',
                            choices=[('veg', 'Veg'), ('non-veg', 'Non-Veg')])
+    cashier_received_at = models.DateTimeField(null=True, blank=True)
+    confirmed_at     = models.DateTimeField(null=True, blank=True)
+    completed_at     = models.DateTimeField(null=True, blank=True)
+    cancelled_at     = models.DateTimeField(null=True, blank=True)
     created_at       = models.DateTimeField(auto_now_add=True)
 
     class Meta:

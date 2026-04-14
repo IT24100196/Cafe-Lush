@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createCashier, getCashiers, updateCashier } from '../../api/endpoints'
-import { useAuth } from '../../context/AuthContext'
+import { EMAIL_MAX_LENGTH, PASSWORD_MIN_LENGTH, isValidEmail, isValidPassword, isValidUsername } from '../../api/validation'
+import { useAuth } from '../../context/authContextCore'
 import { EmptyState, PageHeader, Spinner, Toast } from '../../components/UI'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 
 
 function getErrorMessage(err, priority = []) {
@@ -38,12 +40,17 @@ function getRoleLabel(account) {
 
 
 function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose, mode }) {
+  useBodyScrollLock()
+
   const isEditMode = mode === 'edit'
   const accountLabel = getRoleLabel(initialValues).toLowerCase()
   const [form, setForm] = useState(initialValues)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showCredentialEditor, setShowCredentialEditor] = useState(!isEditMode)
+  const blockPasswordTransfer = (e) => {
+    e.preventDefault()
+  }
 
   const handleChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -71,13 +78,26 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
     const confirmPassword = form.confirm_password
     const payload = {}
 
+    if (email && !isValidEmail(email)) {
+      setError('Enter a valid email address (example: user@example.com).')
+      return
+    }
+
     if (!isEditMode) {
       if (!username) {
         setError('Username is required.')
         return
       }
+      if (!isValidUsername(username)) {
+        setError('Username must be 3-30 characters, include at least one letter, and use only letters, numbers, dot, underscore, or hyphen.')
+        return
+      }
       if (!password) {
         setError('Password is required.')
+        return
+      }
+      if (!isValidPassword(password)) {
+        setError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters and cannot be only numbers.`)
         return
       }
       if (!confirmPassword) {
@@ -103,6 +123,10 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
           setError('New username is required.')
           return
         }
+        if (!isValidUsername(username)) {
+          setError('Username must be 3-30 characters, include at least one letter, and use only letters, numbers, dot, underscore, or hyphen.')
+          return
+        }
         if (username !== (initialValues.username || '')) {
           payload.username = username
         }
@@ -110,6 +134,10 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
         if (password || confirmPassword) {
           if (!password) {
             setError('Enter the new password.')
+            return
+          }
+          if (!isValidPassword(password)) {
+            setError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters and cannot be only numbers.`)
             return
           }
           if (!confirmPassword) {
@@ -169,6 +197,7 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                 value={form.email}
                 onChange={(e) => handleChange('email', e.target.value)}
                 placeholder="Optional"
+                maxLength={EMAIL_MAX_LENGTH}
                 autoFocus={!isEditMode}
               />
             </div>
@@ -233,8 +262,10 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                       <input
                         className="ad-input"
                         value={form.username}
-                        onChange={(e) => handleChange('username', e.target.value)}
+                        onChange={(e) => handleChange('username', e.target.value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 30))}
                         autoFocus
+                        maxLength={30}
+                        pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
                       />
                     </div>
 
@@ -246,6 +277,9 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                         value={form.password}
                         onChange={(e) => handleChange('password', e.target.value)}
                         placeholder="Leave blank if only changing username"
+                        onCopy={blockPasswordTransfer}
+                        onCut={blockPasswordTransfer}
+                        minLength={PASSWORD_MIN_LENGTH}
                       />
                     </div>
 
@@ -257,6 +291,9 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                         value={form.confirm_password}
                         onChange={(e) => handleChange('confirm_password', e.target.value)}
                         placeholder="Re-enter the new password"
+                        onPaste={blockPasswordTransfer}
+                        onDrop={blockPasswordTransfer}
+                        minLength={PASSWORD_MIN_LENGTH}
                       />
                     </div>
                   </div>
@@ -269,7 +306,9 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                   <input
                     className="ad-input"
                     value={form.username}
-                    onChange={(e) => handleChange('username', e.target.value)}
+                    onChange={(e) => handleChange('username', e.target.value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 30))}
+                    maxLength={30}
+                    pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
                   />
                 </div>
 
@@ -280,7 +319,10 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                     type="password"
                     value={form.password}
                     onChange={(e) => handleChange('password', e.target.value)}
-                    placeholder="Minimum 6 characters"
+                    placeholder="Minimum 8 characters"
+                    onCopy={blockPasswordTransfer}
+                    onCut={blockPasswordTransfer}
+                    minLength={PASSWORD_MIN_LENGTH}
                   />
                 </div>
 
@@ -292,6 +334,9 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                     value={form.confirm_password}
                     onChange={(e) => handleChange('confirm_password', e.target.value)}
                     placeholder="Re-enter the password"
+                    onPaste={blockPasswordTransfer}
+                    onDrop={blockPasswordTransfer}
+                    minLength={PASSWORD_MIN_LENGTH}
                   />
                 </div>
               </>

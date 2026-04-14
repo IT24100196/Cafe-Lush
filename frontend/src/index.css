@@ -35,6 +35,43 @@
   }
 }
 
+.landing-hero-bg {
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+}
+
+.landing-hero-scrim {
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.45) 40%, rgba(0, 0, 0, 0.15) 100%);
+}
+
+@media (max-width: 640px) {
+  .landing-nav {
+    background: rgba(44, 26, 14, 0.78) !important;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .landing-hero {
+    align-items: flex-start;
+  }
+
+  .landing-hero-bg {
+    background-position: center top;
+    filter: brightness(1.12) !important;
+  }
+
+  .landing-hero-scrim {
+    background:
+      linear-gradient(to bottom, rgba(0, 0, 0, 0.42) 0%, rgba(0, 0, 0, 0.24) 38%, rgba(0, 0, 0, 0.62) 100%),
+      linear-gradient(to right, rgba(0, 0, 0, 0.38), rgba(0, 0, 0, 0.12));
+  }
+
+  .landing-hero-content {
+    margin-top: 22dvh;
+  }
+}
+
 @media print {
   .no-print { display: none !important; }
   .print-only { display: block !important; }

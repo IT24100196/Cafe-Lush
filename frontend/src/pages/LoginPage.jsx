@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../context/authContextCore'
 import { forgotPassword, requestStudentRegistrationOtp, resetPassword, verifyResetOtp, verifyStudentRegistrationOtp } from '../api/authService'
-import { isValidEmail, isValidSriLankanMobile, normalizePhone } from '../api/validation'
+import {
+  EMAIL_MAX_LENGTH,
+  FULL_NAME_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  isValidEmail,
+  isValidFullName,
+  isValidPassword,
+  isValidSriLankanMobile,
+  isValidUsername,
+  normalizePhone,
+} from '../api/validation'
 import { Spinner } from '../components/UI'
 import { useGoogleLogin } from '@react-oauth/google'
 
@@ -137,7 +147,28 @@ function FeaturePill({ children }) {
   )
 }
 
-function InputField({ label, icon, type = 'text', placeholder, value, onChange, required, autoFocus, rightElement, minLength, compact, inputMode, maxLength, pattern }) {
+function InputField({
+  label,
+  icon,
+  type = 'text',
+  placeholder,
+  value,
+  onChange,
+  required,
+  autoFocus,
+  rightElement,
+  minLength,
+  compact,
+  inputMode,
+  maxLength,
+  pattern,
+  autoComplete,
+  name,
+  onPaste,
+  onCopy,
+  onCut,
+  onDrop,
+}) {
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ marginBottom: compact ? '8px' : '1rem' }}>
@@ -167,6 +198,8 @@ function InputField({ label, icon, type = 'text', placeholder, value, onChange, 
           type={type} placeholder={placeholder} value={value} onChange={onChange}
           required={required} autoFocus={autoFocus} minLength={minLength}
           inputMode={inputMode} maxLength={maxLength} pattern={pattern}
+          autoComplete={autoComplete} name={name}
+          onPaste={onPaste} onCopy={onCopy} onCut={onCut} onDrop={onDrop}
           onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           style={{
             width: '100%', padding: compact ? '9px 36px 9px 38px' : '15px 48px 15px 44px',
@@ -219,13 +252,21 @@ export default function LoginPage() {
   }, [])
 
   const pageStyle = useMemo(() => ({
-    minHeight: '100vh', position: 'relative', overflow: 'hidden',
+    minHeight: isMobile ? '100dvh' : '100vh',
+    position: 'relative',
+    overflowX: 'hidden',
+    overflowY: isMobile ? 'auto' : 'hidden',
     fontFamily: "'DM Sans', sans-serif",
     backgroundImage: "url('/image/image7.png')",
-    backgroundSize: 'cover', backgroundPosition: 'center',
-    backgroundRepeat: 'no-repeat', backgroundAttachment: 'fixed',
-    display: 'flex', alignItems: 'stretch', justifyContent: 'center',
-  }), [])
+    backgroundSize: 'cover',
+    backgroundPosition: isMobile ? 'center top' : 'center',
+    backgroundRepeat: 'no-repeat',
+    backgroundAttachment: isMobile ? 'scroll' : 'fixed',
+    display: 'flex',
+    flexDirection: isMobile ? 'column' : 'row',
+    alignItems: isMobile ? 'center' : 'stretch',
+    justifyContent: isMobile ? 'flex-start' : 'center',
+  }), [isMobile])
 
   // ── Login ────────────────────────────────────────────────────────────────
   const handleLogin = async (e) => {
@@ -288,8 +329,16 @@ export default function LoginPage() {
       setRegError('Username is required.')
       return
     }
+    if (!isValidUsername(username)) {
+      setRegError('Username must be 3-30 characters, include at least one letter, and use only letters, numbers, dot, underscore, or hyphen.')
+      return
+    }
     if (!fullName) {
       setRegError('Full name is required.')
+      return
+    }
+    if (!isValidFullName(fullName)) {
+      setRegError('Full name must contain letters and spaces only.')
       return
     }
     if (!email) {
@@ -302,6 +351,10 @@ export default function LoginPage() {
     }
     if (contact && !isValidSriLankanMobile(contact)) {
       setRegError('Enter a valid Sri Lankan mobile number with exactly 10 digits (example: 0771234567).')
+      return
+    }
+    if (!isValidPassword(regForm.password)) {
+      setRegError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters and cannot be only numbers.`)
       return
     }
     if (regForm.password !== regForm.confirm_password) {
@@ -388,6 +441,10 @@ export default function LoginPage() {
       setResetError('Enter your username or email.')
       return
     }
+    if (identifier.includes('@') && !isValidEmail(identifier)) {
+      setResetError('Enter a valid email address (example: user@example.com), or use your username.')
+      return
+    }
 
     setResetBusy(true)
     setResetError('')
@@ -434,6 +491,10 @@ export default function LoginPage() {
       setResetError('Verify OTP before resetting password.')
       return
     }
+    if (!isValidPassword(resetForm.password)) {
+      setResetError(`Password must be at least ${PASSWORD_MIN_LENGTH} characters and cannot be only numbers.`)
+      return
+    }
     if (resetForm.password !== resetForm.confirm_password) {
       setResetError('Passwords do not match.')
       return
@@ -478,9 +539,9 @@ export default function LoginPage() {
   })
 
   const tabBtnStyle = (active) => ({
-    flex: 1, border: 'none', borderRadius: '12px', padding: '12px 14px',
+    flex: 1, border: 'none', borderRadius: '12px', padding: isMobile ? '10px 8px' : '12px 14px',
     cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
-    fontSize: '14px', fontWeight: 700, transition: 'all 0.2s ease',
+    fontSize: isMobile ? '13px' : '14px', fontWeight: 700, transition: 'all 0.2s ease',
     background: active
       ? 'linear-gradient(135deg, rgba(214,162,81,0.28), rgba(160,94,18,0.22))'
       : 'transparent',
@@ -499,6 +560,10 @@ export default function LoginPage() {
     border: 'none', background: 'transparent',
     color: 'rgba(255,231,192,0.72)', cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+  }
+
+  const blockPasswordTransfer = (e) => {
+    e.preventDefault()
   }
 
   return (
@@ -526,42 +591,46 @@ export default function LoginPage() {
       )}
 
       <div style={{
-        position: 'relative', zIndex: 2, width: '100%', maxWidth: '1440px', minHeight: '100vh',
+        position: 'relative', zIndex: 2, width: '100%', maxWidth: '1440px', minHeight: isMobile ? 'auto' : '100vh',
         display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.08fr 0.92fr',
         alignItems: 'center',
-        padding: isMobile ? '24px' : '48px 52px',
-        boxSizing: 'border-box', gap: isMobile ? '8px' : '0px',
+        padding: isMobile ? '16px 14px 12px' : '48px 52px',
+        boxSizing: 'border-box', gap: isMobile ? '12px' : '0px',
       }}>
 
         {/* ── LEFT — Branding ── */}
         <section style={{
           position: 'relative', zIndex: 2,
-          padding: isMobile ? '12px 4px 0' : '32px 48px 32px 20px',
+          padding: isMobile ? '8px 0 0' : '32px 48px 32px 20px',
           display: 'flex', alignItems: 'center',
+          justifyContent: isMobile ? 'center' : 'flex-start',
           minHeight: isMobile ? 'auto' : '100%',
+          textAlign: isMobile ? 'center' : 'left',
         }}>
-          <div style={{ maxWidth: '640px' }}>
+          <div style={{ maxWidth: isMobile ? '360px' : '640px' }}>
             <div style={{
               display: 'inline-flex', alignItems: 'center', gap: '12px',
-              marginBottom: '24px', padding: '10px 14px', borderRadius: '999px',
+              marginBottom: isMobile ? '10px' : '24px', padding: isMobile ? '8px 12px' : '10px 14px', borderRadius: '999px',
               background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
               backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
             }}>
               <img
                 src="/image/image6.jpeg" alt="Cafe Lush logo"
-                style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', boxShadow: '0 0 0 2px rgba(201,168,76,0.92), 0 0 20px rgba(201,168,76,0.28)' }}
+                style={{ width: isMobile ? '34px' : '44px', height: isMobile ? '34px' : '44px', borderRadius: '50%', objectFit: 'cover', boxShadow: '0 0 0 2px rgba(201,168,76,0.92), 0 0 20px rgba(201,168,76,0.28)' }}
               />
               <div>
                 <div style={{ color: '#fff4df', fontWeight: 700, fontSize: '15px', letterSpacing: '0.03em' }}>Cafe Lush</div>
-                <div style={{ color: 'rgba(245,223,189,0.74)', fontSize: '12px', fontWeight: 600 }}>Where Every Order Meets Excellence</div>
+                {!isMobile && (
+                  <div style={{ color: 'rgba(245,223,189,0.74)', fontSize: '12px', fontWeight: 600 }}>Where Every Order Meets Excellence</div>
+                )}
               </div>
             </div>
 
             <h1 style={{
               margin: 0, color: '#fff7eb',
               fontFamily: "'Cormorant Garamond', serif",
-              fontSize: isMobile ? '52px' : '92px',
-              lineHeight: isMobile ? 0.95 : 0.9,
+              fontSize: isMobile ? '34px' : '92px',
+              lineHeight: isMobile ? 1 : 0.9,
               fontWeight: 700, letterSpacing: '-0.04em', textTransform: 'uppercase',
               textShadow: '0 4px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.28)',
             }}>
@@ -572,12 +641,13 @@ export default function LoginPage() {
               marginTop: '22px', marginBottom: '28px', maxWidth: '560px',
               color: 'rgba(255,240,219,0.84)',
               fontSize: isMobile ? '15px' : '18px', lineHeight: 1.8, fontWeight: 400,
+              display: isMobile ? 'none' : 'block',
             }}>
               Manage orders, staff access, student registration, and daily restaurant
               operations in one premium modern system built for speed and simplicity.
             </p>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: isMobile ? '6px' : '0' }}>
+            <div style={{ display: isMobile ? 'none' : 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: isMobile ? '6px' : '0' }}>
               <FeaturePill>Order Management</FeaturePill>
               <FeaturePill>Staff Access</FeaturePill>
               <FeaturePill>Live Operations</FeaturePill>
@@ -592,14 +662,17 @@ export default function LoginPage() {
           justifyContent: isMobile ? 'stretch' : 'center',
           alignItems: 'center',
           padding: isMobile ? '0' : '32px 20px 32px 48px',
+          width: '100%',
+          boxSizing: 'border-box',
         }}>
           <div style={{
             width: '100%', maxWidth: tab === 'register' ? '520px' : '500px',
             background: 'rgba(255,250,242,0.16)', border: '1px solid rgba(255,230,185,0.30)',
-            borderRadius: '28px', padding: isMobile ? '20px 16px' : tab === 'register' ? '22px 26px' : '32px',
+            borderRadius: isMobile ? '20px' : '28px', padding: isMobile ? '18px 16px' : tab === 'register' ? '22px 26px' : '32px',
             backdropFilter: 'blur(32px)', WebkitBackdropFilter: 'blur(32px)',
             boxShadow: '0 8px 12px rgba(0,0,0,0.12), 0 32px 80px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(0,0,0,0.06)',
-            maxHeight: '96vh', overflowY: 'auto',
+            maxHeight: isMobile ? 'none' : '96vh',
+            overflowY: isMobile ? 'visible' : 'auto',
           }}>
 
             {/* Card header */}
@@ -662,6 +735,8 @@ export default function LoginPage() {
                     placeholder="Enter your username"
                     value={loginForm.username}
                     onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                    name="login_username"
+                    autoComplete="username"
                     required autoFocus
                   />
                   <InputField
@@ -670,6 +745,8 @@ export default function LoginPage() {
                     placeholder="Enter your password"
                     value={loginForm.password}
                     onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                    name="login_password"
+                    autoComplete="current-password"
                     required
                     rightElement={
                       <button type="button" onClick={() => setShowLoginPass(!showLoginPass)} style={eyeBtnStyle}>
@@ -735,6 +812,9 @@ export default function LoginPage() {
                       placeholder="Enter your username or unique email"
                       value={resetForm.identifier}
                       onChange={(e) => setResetForm({ ...resetForm, identifier: e.target.value })}
+                      name="password_reset_identifier"
+                      autoComplete="username"
+                      maxLength={EMAIL_MAX_LENGTH}
                       required
                       autoFocus
                     />
@@ -753,6 +833,8 @@ export default function LoginPage() {
                       placeholder="Enter 6 digit OTP"
                       value={resetForm.otp}
                       onChange={(e) => setResetForm({ ...resetForm, otp: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                      name="password_reset_otp"
+                      autoComplete="one-time-code"
                       required
                       autoFocus
                     />
@@ -779,8 +861,10 @@ export default function LoginPage() {
                       placeholder="Enter new password"
                       value={resetForm.password}
                       onChange={(e) => setResetForm({ ...resetForm, password: e.target.value })}
+                      name="reset_new_password"
+                      autoComplete="new-password"
                       required
-                      minLength={6}
+                      minLength={PASSWORD_MIN_LENGTH}
                       autoFocus
                       rightElement={
                         <button type="button" onClick={() => setShowResetPass(!showResetPass)} style={eyeBtnStyle}>
@@ -795,8 +879,12 @@ export default function LoginPage() {
                       placeholder="Re-enter new password"
                       value={resetForm.confirm_password}
                       onChange={(e) => setResetForm({ ...resetForm, confirm_password: e.target.value })}
+                      name="reset_confirm_password"
+                      autoComplete="new-password"
+                      onPaste={blockPasswordTransfer}
+                      onDrop={blockPasswordTransfer}
                       required
-                      minLength={6}
+                      minLength={PASSWORD_MIN_LENGTH}
                     />
                     <button type="submit" disabled={resetBusy} style={submitBtnStyle(resetBusy)}>
                       {resetBusy ? <Spinner size="sm" /> : null}
@@ -830,26 +918,46 @@ export default function LoginPage() {
                 )}
 
                 {regStep === 'form' ? (
-                  <form onSubmit={handleRegister}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
+                  <form onSubmit={handleRegister} autoComplete="off">
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? '0' : '0 12px' }}>
                       <div style={{ gridColumn: '1 / -1' }}>
                         <InputField compact label="Full Name" icon={<IconUser />} placeholder="Enter your full name"
-                          value={regForm.full_name} onChange={(e) => setRegForm({ ...regForm, full_name: e.target.value })} required />
+                          value={regForm.full_name}
+                          onChange={(e) => setRegForm({ ...regForm, full_name: e.target.value.replace(/[^\p{L}\s]/gu, '') })}
+                          name="student_register_full_name"
+                          autoComplete="name"
+                          maxLength={FULL_NAME_MAX_LENGTH}
+                          required />
                       </div>
                       <InputField compact label="Username" icon={<IconUser />} placeholder="Choose a username"
-                        value={regForm.username} onChange={(e) => setRegForm({ ...regForm, username: e.target.value })} required />
+                        value={regForm.username}
+                        onChange={(e) => setRegForm({ ...regForm, username: e.target.value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 30) })}
+                        name="student_register_username"
+                        autoComplete="off"
+                        maxLength={30}
+                        pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
+                        required />
                       <InputField compact label="Contact" icon={<IconPhone />} placeholder="07xxxxxxxx"
                         value={regForm.contact}
                         onChange={(e) => setRegForm({ ...regForm, contact: normalizePhone(e.target.value) })}
                         inputMode="numeric" maxLength={10} pattern="[0-9]*" />
                       <div style={{ gridColumn: '1 / -1' }}>
                         <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Enter email address"
-                          value={regForm.email} onChange={(e) => setRegForm({ ...regForm, email: e.target.value })} required />
+                          value={regForm.email}
+                          onChange={(e) => setRegForm({ ...regForm, email: e.target.value })}
+                          name="student_register_email"
+                          autoComplete="email"
+                          maxLength={EMAIL_MAX_LENGTH}
+                          required />
                       </div>
                       <InputField compact label="Password" icon={<IconLock />}
-                        type={showRegPass ? 'text' : 'password'} placeholder="Min 6 characters"
+                        type={showRegPass ? 'text' : 'password'} placeholder="Min 8 characters"
                         value={regForm.password} onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
-                        required minLength={6}
+                        name="student_register_password"
+                        autoComplete="new-password"
+                        onCopy={blockPasswordTransfer}
+                        onCut={blockPasswordTransfer}
+                        required minLength={PASSWORD_MIN_LENGTH}
                         rightElement={
                           <button type="button" onClick={() => setShowRegPass(!showRegPass)} style={eyeBtnStyle}>
                             {showRegPass ? <IconEyeOff /> : <IconEye />}
@@ -858,7 +966,13 @@ export default function LoginPage() {
                       />
                       <InputField compact label="Confirm Password" icon={<IconLock />}
                         type={showRegPass ? 'text' : 'password'} placeholder="Repeat password"
-                        value={regForm.confirm_password} onChange={(e) => setRegForm({ ...regForm, confirm_password: e.target.value })} required />
+                        value={regForm.confirm_password}
+                        onChange={(e) => setRegForm({ ...regForm, confirm_password: e.target.value })}
+                        name="student_register_confirm_password"
+                        autoComplete="new-password"
+                        onPaste={blockPasswordTransfer}
+                        onDrop={blockPasswordTransfer}
+                        required minLength={PASSWORD_MIN_LENGTH} />
                     </div>
 
                     <button type="submit" disabled={regBusy} style={{ ...submitBtnStyle(regBusy), padding: '11px 18px', marginTop: '6px', fontSize: '14px' }}>
@@ -869,7 +983,12 @@ export default function LoginPage() {
                 ) : (
                   <form onSubmit={handleVerifyRegistrationOtp}>
                     <InputField compact label="Email" icon={<IconMail />} type="email" placeholder="Email address"
-                      value={regForm.email} onChange={() => {}} required />
+                      value={regForm.email}
+                      onChange={() => {}}
+                      name="student_register_otp_email"
+                      autoComplete="email"
+                      maxLength={EMAIL_MAX_LENGTH}
+                      required />
                     <InputField compact label="OTP" icon={<IconLock />} placeholder="Enter 6 digit OTP"
                       value={regOtp} onChange={(e) => setRegOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} required autoFocus />
                     <button type="submit" disabled={regBusy} style={{ ...submitBtnStyle(regBusy), padding: '11px 18px', marginTop: '6px', fontSize: '14px' }}>
@@ -901,10 +1020,14 @@ export default function LoginPage() {
 
       {/* Footer */}
       <div style={{
-        position: 'absolute', bottom: '18px', left: '50%', transform: 'translateX(-50%)',
+        position: isMobile ? 'relative' : 'absolute',
+        bottom: isMobile ? 'auto' : '18px',
+        left: isMobile ? 'auto' : '50%',
+        transform: isMobile ? 'none' : 'translateX(-50%)',
         zIndex: 3, color: 'rgba(255,230,194,0.56)', fontSize: '11px',
         letterSpacing: '0.06em', textAlign: 'center', width: '100%',
         padding: '0 12px', boxSizing: 'border-box',
+        margin: isMobile ? '0 0 18px' : 0,
       }}>
         © 2025 AxionSoft. All rights reserved. | Privacy Policy | Terms of Use
       </div>

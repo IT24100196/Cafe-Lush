@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth } from '../../context/authContextCore'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 import './AdminDashboard.css'
 
 const NAV = [
@@ -83,6 +84,8 @@ export default function AdminLayout() {
   const { user, logout } = useAuth()
   const [mobileOpen, setMobileOpen] = useState(false)
   const navigate = useNavigate()
+
+  useBodyScrollLock(mobileOpen)
 
   const handleLogout = async () => {
     await logout()

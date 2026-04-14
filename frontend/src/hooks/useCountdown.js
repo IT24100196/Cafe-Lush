@@ -1,5 +1,17 @@
 import { useState, useEffect } from 'react'
 
+function getCountdownState(targetDate, now = Date.now()) {
+  if (!targetDate) return { timeLeft: '', isPast: false }
+
+  const diff = new Date(targetDate) - now
+  if (diff <= 0) return { timeLeft: 'Cutoff passed', isPast: true }
+
+  const h = Math.floor(diff / 3_600_000)
+  const m = Math.floor((diff % 3_600_000) / 60_000)
+  const s = Math.floor((diff % 60_000) / 1_000)
+  return { timeLeft: `${h}h ${m}m ${s}s remaining`, isPast: false }
+}
+
 /**
  * Returns a live countdown string and whether the cutoff has passed.
  *
@@ -10,30 +22,12 @@ import { useState, useEffect } from 'react'
  * @returns {{ timeLeft: string, isPast: boolean }}
  */
 export function useCountdown(targetDate) {
-  const [timeLeft, setTimeLeft] = useState('')
-  const [isPast,   setIsPast]   = useState(false)
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    if (!targetDate) { setTimeLeft(''); setIsPast(false); return }
-
-    const tick = () => {
-      const diff = new Date(targetDate) - Date.now()
-      if (diff <= 0) {
-        setIsPast(true)
-        setTimeLeft('Cutoff passed')
-        return
-      }
-      setIsPast(false)
-      const h = Math.floor(diff / 3_600_000)
-      const m = Math.floor((diff % 3_600_000) / 60_000)
-      const s = Math.floor((diff % 60_000) / 1_000)
-      setTimeLeft(`${h}h ${m}m ${s}s remaining`)
-    }
-
-    tick()
-    const id = setInterval(tick, 1000)
+    const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [targetDate])
+  }, [])
 
-  return { timeLeft, isPast }
+  return getCountdownState(targetDate, now)
 }

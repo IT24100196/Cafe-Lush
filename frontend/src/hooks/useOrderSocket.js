@@ -15,6 +15,7 @@ export function useOrderSocket({ onNewOrder, onOrderUpdated, onStatusChange } = 
   const wsRef = useRef(null)
   const timerRef = useRef(null)
   const mountedRef = useRef(true)
+  const connectRef = useRef(null)
 
   const onNewOrderRef = useRef(onNewOrder)
   const onOrderUpdatedRef = useRef(onOrderUpdated)
@@ -23,6 +24,12 @@ export function useOrderSocket({ onNewOrder, onOrderUpdated, onStatusChange } = 
   useEffect(() => { onNewOrderRef.current = onNewOrder }, [onNewOrder])
   useEffect(() => { onOrderUpdatedRef.current = onOrderUpdated }, [onOrderUpdated])
   useEffect(() => { onStatusChangeRef.current = onStatusChange }, [onStatusChange])
+
+  const scheduleReconnect = useCallback(() => {
+    if (!mountedRef.current) return
+    onStatusChangeRef.current?.('reconnecting')
+    timerRef.current = setTimeout(() => connectRef.current?.(), RECONNECT_DELAY)
+  }, [])
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -50,11 +57,13 @@ export function useOrderSocket({ onNewOrder, onOrderUpdated, onStatusChange } = 
     }
 
     ws.onclose = () => {
-      if (!mountedRef.current) return
-      onStatusChangeRef.current?.('reconnecting')
-      timerRef.current = setTimeout(connect, RECONNECT_DELAY)
+      scheduleReconnect()
     }
-  }, [])
+  }, [scheduleReconnect])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     mountedRef.current = true

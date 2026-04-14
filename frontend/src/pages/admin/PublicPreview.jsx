@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { getItems, updateItem, getFeaturedItems, setFeaturedItem, removeFeaturedItem } from '../../api/endpoints'
 import { Spinner, PageHeader } from '../../components/UI'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 
 export default function PublicPreview() {
   const [featuredItems, setFeaturedItems] = useState([null, null, null, null])
@@ -13,19 +14,25 @@ export default function PublicPreview() {
   const [showPicker,    setShowPicker]    = useState(null)
   const [pickerSearch,  setPickerSearch]  = useState('')
 
+  useBodyScrollLock(showPicker !== null)
+
   async function fetchFeatured() {
     try {
       const res = await getFeaturedItems()
       const slots = [null, null, null, null]
       res.data.forEach(fi => { slots[fi.position - 1] = fi })
       setFeaturedItems(slots)
-    } catch {}
+    } catch {
+      // Keep the previous featured slots if the refresh fails.
+    }
   }
 
   useEffect(() => {
     Promise.all([
       fetchFeatured(),
-      getItems().then(res => setAllItems(res.data)).catch(() => {}),
+      getItems().then(res => setAllItems(res.data)).catch(() => {
+        // Keep the item picker empty if menu items cannot be loaded.
+      }),
     ]).finally(() => setLoading(false))
   }, [])
 
@@ -74,6 +81,12 @@ export default function PublicPreview() {
   return (
     <div className="space-y-6">
       <PageHeader title="Public Menu Preview" />
+
+      {loading && (
+        <div className="flex justify-center py-10">
+          <Spinner />
+        </div>
+      )}
 
       {/* Info banner */}
       <div className="rounded-2xl border border-gold/20 bg-gradient-to-r from-brown to-brown-light px-6 py-4 flex items-center justify-between">

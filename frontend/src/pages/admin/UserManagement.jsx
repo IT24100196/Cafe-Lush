@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getStudents, deactivateStudent, activateStudent } from '../../api/endpoints'
 import { EmptyState, PageHeader, Spinner } from '../../components/UI'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 
 function DeactivateModal({ student, onConfirm, onCancel }) {
+  useBodyScrollLock()
+
   const [reason,  setReason]  = useState('')
   const [saving,  setSaving]  = useState(false)
   const [error,   setError]   = useState('')

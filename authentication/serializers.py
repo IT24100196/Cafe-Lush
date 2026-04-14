@@ -2,11 +2,29 @@ from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import User, Role
-from hotel_pos_backend.validators import validate_generic_email_format, validate_sri_lankan_mobile
+from hotel_pos_backend.validators import (
+    PASSWORD_MIN_LENGTH,
+    validate_generic_email_format,
+    validate_person_name,
+    validate_sri_lankan_mobile,
+    validate_username_format,
+)
 
 
 def _django_error_message(exc):
     return exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
+
+
+def _validate_identifier(value):
+    identifier = value.strip()
+    if not identifier:
+        raise serializers.ValidationError('Username or email is required.')
+    if '@' in identifier:
+        try:
+            return validate_generic_email_format(identifier, required=True)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
+    return identifier
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -35,7 +53,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password  = serializers.CharField(write_only=True, min_length=6)
+    password  = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
     role_name = serializers.ChoiceField(choices=Role.ROLE_CHOICES, write_only=True)
 
     class Meta:
@@ -43,9 +61,10 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ['username', 'email', 'password', 'role_name']
 
     def validate_username(self, value):
-        username = value.strip()
-        if not username:
-            raise serializers.ValidationError('Username is required.')
+        try:
+            username = validate_username_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
         if User.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError('Username already taken.')
         return username
@@ -76,14 +95,18 @@ class StudentRegisterSerializer(serializers.Serializer):
     """Public registration — always creates a student account + student profile."""
     username  = serializers.CharField(max_length=100)
     email     = serializers.CharField(max_length=254, required=False, allow_blank=True)
-    password  = serializers.CharField(write_only=True, min_length=6)
+    password  = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
     full_name = serializers.CharField(max_length=150)
     contact   = serializers.CharField(max_length=50, required=False, allow_blank=True)
 
     def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
+        try:
+            username = validate_username_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
+        if User.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError('Username already taken.')
-        return value
+        return username
 
     def validate_email(self, value):
         try:
@@ -93,6 +116,12 @@ class StudentRegisterSerializer(serializers.Serializer):
         if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError('This email is already in use.')
         return email
+
+    def validate_full_name(self, value):
+        try:
+            return validate_person_name(value, required=True, label='Full name')
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
 
     def validate_contact(self, value):
         try:
@@ -120,15 +149,16 @@ class StudentRegisterSerializer(serializers.Serializer):
 class StudentRegistrationOTPRequestSerializer(serializers.Serializer):
     username         = serializers.CharField(max_length=100)
     email            = serializers.CharField(max_length=254)
-    password         = serializers.CharField(write_only=True, min_length=6)
-    confirm_password = serializers.CharField(write_only=True, min_length=6)
+    password         = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
+    confirm_password = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
     full_name        = serializers.CharField(max_length=150)
     contact          = serializers.CharField(max_length=50, required=False, allow_blank=True)
 
     def validate_username(self, value):
-        username = value.strip()
-        if not username:
-            raise serializers.ValidationError('Username is required.')
+        try:
+            username = validate_username_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
         if User.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError('Username already taken.')
         return username
@@ -143,10 +173,10 @@ class StudentRegistrationOTPRequestSerializer(serializers.Serializer):
         return email
 
     def validate_full_name(self, value):
-        full_name = value.strip()
-        if not full_name:
-            raise serializers.ValidationError('Full name is required.')
-        return full_name
+        try:
+            return validate_person_name(value, required=True, label='Full name')
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
 
     def validate_contact(self, value):
         try:
@@ -195,6 +225,12 @@ class ProfileUpdateSerializer(serializers.Serializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(_django_error_message(exc))
 
+    def validate_full_name(self, value):
+        try:
+            return validate_person_name(value, required=True, label='Full name')
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
+
     def validate_contact(self, value):
         try:
             return validate_sri_lankan_mobile(value, required=False, label='Contact number')
@@ -212,22 +248,26 @@ class ProfileUpdateSerializer(serializers.Serializer):
 class CashierAdminCreateSerializer(serializers.Serializer):
     username         = serializers.CharField(max_length=100)
     email            = serializers.CharField(max_length=254, required=False, allow_blank=True)
-    password         = serializers.CharField(write_only=True, min_length=6)
-    confirm_password = serializers.CharField(write_only=True, min_length=6)
+    password         = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
+    confirm_password = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
 
     def validate_username(self, value):
-        username = value.strip()
-        if not username:
-            raise serializers.ValidationError('Username is required.')
+        try:
+            username = validate_username_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
         if User.objects.filter(username__iexact=username).exists():
             raise serializers.ValidationError('Username already taken.')
         return username
 
     def validate_email(self, value):
         try:
-            return validate_generic_email_format(value, required=False)
+            email = validate_generic_email_format(value, required=False)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(_django_error_message(exc))
+        if email and User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError('This email is already in use.')
+        return email
 
     def validate_password(self, value):
         try:
@@ -250,14 +290,15 @@ class CashierAdminCreateSerializer(serializers.Serializer):
 class CashierAdminUpdateSerializer(serializers.Serializer):
     username         = serializers.CharField(max_length=100, required=False)
     email            = serializers.CharField(max_length=254, required=False, allow_blank=True)
-    password         = serializers.CharField(write_only=True, min_length=6, required=False, allow_blank=True)
-    confirm_password = serializers.CharField(write_only=True, min_length=6, required=False, allow_blank=True)
+    password         = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH, required=False, allow_blank=True)
+    confirm_password = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH, required=False, allow_blank=True)
     is_active        = serializers.BooleanField(required=False)
 
     def validate_username(self, value):
-        username = value.strip()
-        if not username:
-            raise serializers.ValidationError('Username is required.')
+        try:
+            username = validate_username_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(_django_error_message(exc))
         user = self.context.get('user')
         if user and User.objects.filter(username__iexact=username).exclude(pk=user.pk).exists():
             raise serializers.ValidationError('Username already taken.')
@@ -265,9 +306,13 @@ class CashierAdminUpdateSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         try:
-            return validate_generic_email_format(value, required=False)
+            email = validate_generic_email_format(value, required=False)
         except DjangoValidationError as exc:
             raise serializers.ValidationError(_django_error_message(exc))
+        user = self.context.get('user')
+        if email and User.objects.filter(email__iexact=email).exclude(pk=getattr(user, 'pk', None)).exists():
+            raise serializers.ValidationError('This email is already in use.')
+        return email
 
     def validate_password(self, value):
         if not value:
@@ -299,10 +344,7 @@ class ForgotPasswordSerializer(serializers.Serializer):
     identifier = serializers.CharField(max_length=254)
 
     def validate_identifier(self, value):
-        identifier = value.strip()
-        if not identifier:
-            raise serializers.ValidationError('Username or email is required.')
-        return identifier
+        return _validate_identifier(value)
 
 
 class VerifyResetOTPSerializer(serializers.Serializer):
@@ -310,10 +352,7 @@ class VerifyResetOTPSerializer(serializers.Serializer):
     otp        = serializers.CharField(max_length=6)
 
     def validate_identifier(self, value):
-        identifier = value.strip()
-        if not identifier:
-            raise serializers.ValidationError('Username or email is required.')
-        return identifier
+        return _validate_identifier(value)
 
     def validate_otp(self, value):
         otp = value.strip()
@@ -325,14 +364,11 @@ class VerifyResetOTPSerializer(serializers.Serializer):
 class ResetPasswordSerializer(serializers.Serializer):
     identifier       = serializers.CharField(max_length=254)
     reset_token      = serializers.CharField(max_length=128)
-    password         = serializers.CharField(write_only=True, min_length=6)
-    confirm_password = serializers.CharField(write_only=True, min_length=6)
+    password         = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
+    confirm_password = serializers.CharField(write_only=True, min_length=PASSWORD_MIN_LENGTH)
 
     def validate_identifier(self, value):
-        identifier = value.strip()
-        if not identifier:
-            raise serializers.ValidationError('Username or email is required.')
-        return identifier
+        return _validate_identifier(value)
 
     def validate_password(self, value):
         try:

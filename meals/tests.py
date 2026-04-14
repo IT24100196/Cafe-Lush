@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 
 from authentication.models import Role, User
 from meals.delivery import correct_delivery_address, get_delivery_address_candidates
-from meals.models import Bill, MealOrder, MealType, Student
+from meals.models import Bill, MealOrder, MealType, Notification, Student
 from meals.serializers import MealOrderSerializer
 from pos.models import Category, Item, WeeklyMealPlan
 
@@ -168,6 +168,84 @@ class MenuItemCheckoutTests(TestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, 'pending')
         self.assertEqual(str(response.data['detail']), 'Only confirmed orders can be completed.')
+
+    def test_cashier_rejects_session_with_one_notification(self):
+        session_id = 'cashier-reject-session'
+        order_one = MealOrder.objects.create(
+            student=self.student,
+            item=self.item_one,
+            order_type='item',
+            order_date=timezone.localdate(),
+            delivery_type='takeaway',
+            quantity=1,
+            phone_number='0771234567',
+            session_id=session_id,
+        )
+        order_two = MealOrder.objects.create(
+            student=self.student,
+            item=self.item_two,
+            order_type='item',
+            order_date=timezone.localdate(),
+            delivery_type='takeaway',
+            quantity=2,
+            phone_number='0771234567',
+            session_id=session_id,
+        )
+        self.client.force_authenticate(user=self.cashier)
+
+        response = self.client.patch(
+            f'/api/meals/orders/session/{session_id}/status/',
+            {'status': 'cancelled'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        order_one.refresh_from_db()
+        order_two.refresh_from_db()
+        self.assertEqual(order_one.status, 'cancelled')
+        self.assertEqual(order_two.status, 'cancelled')
+        self.assertIsNotNone(order_one.cancelled_at)
+        self.assertIsNotNone(order_two.cancelled_at)
+        self.assertEqual(Notification.objects.filter(student=self.student).count(), 1)
+
+    def test_cashier_confirms_session_with_one_notification(self):
+        session_id = 'cashier-confirm-session'
+        order_one = MealOrder.objects.create(
+            student=self.student,
+            item=self.item_one,
+            order_type='item',
+            order_date=timezone.localdate(),
+            delivery_type='takeaway',
+            quantity=1,
+            phone_number='0771234567',
+            session_id=session_id,
+        )
+        order_two = MealOrder.objects.create(
+            student=self.student,
+            item=self.item_two,
+            order_type='item',
+            order_date=timezone.localdate(),
+            delivery_type='takeaway',
+            quantity=2,
+            phone_number='0771234567',
+            session_id=session_id,
+        )
+        self.client.force_authenticate(user=self.cashier)
+
+        response = self.client.patch(
+            f'/api/meals/orders/session/{session_id}/status/',
+            {'status': 'confirmed'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        order_one.refresh_from_db()
+        order_two.refresh_from_db()
+        self.assertEqual(order_one.status, 'confirmed')
+        self.assertEqual(order_two.status, 'confirmed')
+        self.assertIsNotNone(order_one.confirmed_at)
+        self.assertIsNotNone(order_two.confirmed_at)
+        self.assertEqual(Notification.objects.filter(student=self.student).count(), 1)
 
     def test_package_order_rejects_dates_more_than_three_days_ahead(self):
         dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})

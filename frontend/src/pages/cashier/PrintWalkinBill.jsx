@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { sendBillEmail } from '../../api/endpoints'
-import { isValidEmail } from '../../api/validation'
+import { EMAIL_MAX_LENGTH, isValidEmail } from '../../api/validation'
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
 import { finalizeThermalPrint } from './thermalPrint'
 import { KITCHEN_RECEIPT_CSS, buildKitchenReceiptHtml } from './printReceiptHelpers'
 import './PrintBillView.css'
@@ -8,6 +9,8 @@ import './PrintBillView.css'
 const WALKIN_BILL_LOGO_SRC = '/image/image6.jpeg'
 
 export default function PrintWalkinBill({ bill, onClose }) {
+  useBodyScrollLock()
+
   const [email,    setEmail]    = useState('')
   const [sending,  setSending]  = useState(false)
   const [emailSent, setEmailSent] = useState(false)
@@ -337,6 +340,7 @@ export default function PrintWalkinBill({ bill, onClose }) {
               placeholder="Enter email address"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setEmailMsg('') }}
+              maxLength={EMAIL_MAX_LENGTH}
               style={{ flex: 1, padding: '7px 10px', borderRadius: '6px', border: '1.5px solid #e5e7eb', fontSize: '13px', outline: 'none', fontFamily: 'inherit' }}
             />
             <button

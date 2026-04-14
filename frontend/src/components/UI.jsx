@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { CheckCircle2, XCircle } from 'lucide-react'
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock'
 
 // Spinner
 export function Spinner({ size = 'md' }) {
@@ -31,6 +33,8 @@ export function Badge({ status }) {
 
 // Modal
 export function Modal({ title, onClose, children }) {
+  useBodyScrollLock()
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-brown-dark/50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-cream-dark">
@@ -45,27 +49,42 @@ export function Modal({ title, onClose, children }) {
 }
 
 // Confirm Dialog
-export function ConfirmDialog({ message, onConfirm, onCancel }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-brown-dark/50 backdrop-blur-sm p-4">
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+}) {
+  useBodyScrollLock()
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-brown-dark/50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-cream-dark">
+        {title && (
+          <h3 className="font-playfair font-bold text-brown text-lg mb-2">{title}</h3>
+        )}
         <p className="font-inter text-brown/80 mb-6 leading-relaxed">{message}</p>
         <div className="flex gap-3 justify-end">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 rounded-xl border border-cream-dark text-brown/70 text-sm font-medium hover:bg-cream transition-colors"
-          >
-            Cancel
-          </button>
+          {cancelLabel && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 rounded-xl border border-cream-dark text-brown/70 text-sm font-medium hover:bg-cream transition-colors"
+            >
+              {cancelLabel}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             className="px-4 py-2 rounded-xl bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors"
           >
-            Confirm
+            {confirmLabel}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

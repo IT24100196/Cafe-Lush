@@ -809,6 +809,35 @@
   font-family: 'DM Sans', sans-serif;
 }
 
+.cd-btn-refresh {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid rgba(74, 124, 69, 0.24);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--forest);
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  font-weight: 800;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.cd-btn-refresh:hover:not(:disabled) {
+  border-color: var(--forest-light);
+  background: #f7fff5;
+  transform: translateY(-1px);
+}
+
+.cd-btn-refresh:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  transform: none;
+}
+
 .cd-btn-clear:hover {
   color: #E07070;
 }
