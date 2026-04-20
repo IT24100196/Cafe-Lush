@@ -114,6 +114,11 @@ class Bill(models.Model):
     subtotal_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_fee  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount  = models.DecimalField(max_digits=10, decimal_places=2)
+    original_items = models.JSONField(default=list, blank=True)
+    original_total_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    edited_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='edited_walkin_bills')
+    edited_at = models.DateTimeField(null=True, blank=True)
+    edit_count = models.PositiveIntegerField(default=0)
     sent_to_email = models.EmailField(blank=True, default='')
     generated_at  = models.DateTimeField(auto_now_add=True)
 

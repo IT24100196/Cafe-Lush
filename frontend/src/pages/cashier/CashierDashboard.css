@@ -1430,3 +1430,247 @@
   background: rgba(126, 200, 122, 0.08);
   color: var(--forest);
 }
+
+.cd-hbill-edit-btn {
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid rgba(201, 168, 76, 0.36);
+  background: rgba(201, 168, 76, 0.12);
+  color: var(--espresso);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.cd-hbill-edit-btn:hover {
+  background: rgba(201, 168, 76, 0.2);
+  border-color: rgba(201, 168, 76, 0.55);
+}
+
+.cd-hbill-edited-note {
+  font-size: 11px;
+  color: var(--forest-light);
+  font-weight: 600;
+}
+
+.cd-hbill-edited-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(201, 168, 76, 0.16);
+  border: 1px solid rgba(201, 168, 76, 0.3);
+  color: var(--espresso);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cd-editbill-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(18, 12, 8, 0.48);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+}
+
+.cd-editbill-modal {
+  width: min(1180px, 100%);
+  height: min(92vh, 920px);
+  max-height: 92vh;
+  overflow: hidden;
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fffdf8 0%, #fff8ef 100%);
+  box-shadow: 0 32px 90px rgba(28, 19, 12, 0.28);
+  border: 1px solid rgba(201, 168, 76, 0.2);
+  display: flex;
+  flex-direction: column;
+  padding: 22px;
+}
+
+.cd-editbill-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.cd-editbill-eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--forest-light);
+  margin-bottom: 6px;
+}
+
+.cd-editbill-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--espresso);
+}
+
+.cd-editbill-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.cd-editbill-close {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--espresso);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cd-editbill-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 18px;
+  height: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.cd-editbill-browser,
+.cd-editbill-summary {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: var(--shadow-sm);
+}
+
+.cd-editbill-browser {
+  padding: 16px;
+  overflow: hidden;
+  height: 100%;
+}
+
+.cd-editbill-customer {
+  margin-bottom: 14px;
+}
+
+.cd-editbill-customer label {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.cd-editbill-customer input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border-soft);
+  background: #fff;
+  color: var(--espresso);
+  font-size: 13px;
+  outline: none;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.cd-editbill-items-grid {
+  flex: none;
+  height: auto;
+  overflow: visible;
+  min-height: auto;
+  align-content: start;
+}
+
+.cd-editbill-browser .cd-products-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+}
+
+.cd-editbill-browser-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(126, 200, 122, 0.26) transparent;
+}
+
+.cd-editbill-browser-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cd-editbill-browser-scroll::-webkit-scrollbar-thumb {
+  background: rgba(126, 200, 122, 0.26);
+  border-radius: 999px;
+}
+
+.cd-editbill-browser .cd-item-card {
+  overflow: hidden;
+}
+
+.cd-editbill-panel {
+  width: auto;
+  height: 100%;
+  max-height: none;
+  position: relative;
+  top: auto;
+}
+
+.cd-editbill-cancel {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.cd-editbill-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cd-editbill-actions .cd-btn-clear,
+.cd-editbill-actions .cd-btn-create {
+  flex: 1;
+}
+
+@media (max-width: 980px) {
+  .cd-editbill-overlay {
+    padding: 12px;
+  }
+
+  .cd-editbill-modal {
+    height: min(95vh, 920px);
+    max-height: 95vh;
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .cd-editbill-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .cd-editbill-title {
+    font-size: 24px;
+  }
+}

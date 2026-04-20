@@ -136,6 +136,8 @@ export default function ItemsManagement() {
   const [itemDeleteId, setItemDeleteId] = useState(null)
   const [itemSaving, setItemSaving] = useState(false)
   const [itemError, setItemError] = useState('')
+  const [itemActionError, setItemActionError] = useState('')
+  const [togglingItemId, setTogglingItemId] = useState(null)
   const [filterCat, setFilterCat] = useState('all')
 
   const loading = loadingItems || loadingCats
@@ -304,6 +306,24 @@ export default function ItemsManagement() {
     refetchItems()
   }
 
+  const handleToggleAvailability = async (item) => {
+    setItemActionError('')
+    setTogglingItemId(item.id)
+    try {
+      const fd = new FormData()
+      fd.append('is_available', item.is_available ? 'false' : 'true')
+      await updateItem(item.id, fd)
+      refetchItems()
+    } catch (err) {
+      const d = err.response?.data
+      setItemActionError(
+        d?.detail || (d ? JSON.stringify(d) : 'Failed to update item availability.')
+      )
+    } finally {
+      setTogglingItemId(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="🍽️ Menu Management" />
@@ -435,6 +455,7 @@ export default function ItemsManagement() {
                 </div>
               ) : (
                 <div className="space-y-7">
+                  <FormError msg={itemActionError} />
                   {groupedItems.map(({ cat, items: catItems }) => (
                     <div key={cat.id} className="space-y-3">
                       <div className="flex items-center justify-between">
@@ -474,21 +495,41 @@ export default function ItemsManagement() {
                             </div>
 
                             <div className="p-4">
+                              <div className="mb-3 flex items-start justify-between gap-3">
+                                <label
+                                  className="flex items-center gap-2 text-xs font-medium text-slate-600"
+                                  style={{ cursor: togglingItemId === item.id ? 'wait' : 'pointer' }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={item.is_available}
+                                    disabled={togglingItemId === item.id}
+                                    onChange={() => handleToggleAvailability(item)}
+                                    className="h-4 w-4 rounded border-sky-300 text-sky-600 focus:ring-sky-500"
+                                  />
+                                  {togglingItemId === item.id
+                                    ? 'Saving...'
+                                    : item.is_available
+                                      ? 'Available'
+                                      : 'Unavailable'}
+                                </label>
+                                <Badge
+                                  status={
+                                    item.is_available ? 'available' : 'unavailable'
+                                  }
+                                  label={item.is_available ? 'Available' : 'Unavailable'}
+                                />
+                              </div>
+
                               <p className="text-sm font-semibold leading-tight text-slate-800">
                                 {item.name}
                               </p>
 
                               <p className="mt-1 text-lg font-bold" style={{ color: 'var(--gold)' }}>
-                                ₱{parseFloat(item.price).toFixed(2)}
+                                LKR {parseFloat(item.price).toFixed(2)}
                               </p>
 
-                              <div className="mt-3 flex items-center justify-between">
-                                <Badge
-                                  status={
-                                    item.is_available ? 'confirmed' : 'cancelled'
-                                  }
-                                />
-
+                              <div className="mt-3 flex items-center justify-end">
                                 <div className="flex gap-2">
                                   <button
                                     onClick={() => openEditItem(item)}
@@ -634,7 +675,7 @@ export default function ItemsManagement() {
 
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-600">
-                Price (₱)
+                Price (LKR)
               </label>
               <input
                 className="input"

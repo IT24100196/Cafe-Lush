@@ -40,10 +40,12 @@ function DetailItem({ label, value }) {
 
 function WalkInBillCard({ bill, expanded, onToggle }) {
   const items = bill.items || []
+  const originalItems = bill.original_items || []
   const itemCount = getBillItemCount(bill)
   const subtotal = getBillSubtotal(bill)
   const total = toAmount(bill.total_amount || subtotal)
   const isExpanded = expanded === String(bill.id)
+  const isEdited = Boolean(bill.is_edited || Number(bill.edit_count || 0) > 0 || bill.edited_at)
 
   return (
     <article className={`ad-card ad-order-card ad-walk-card${isExpanded ? ' expanded' : ''}`}>
@@ -66,6 +68,11 @@ function WalkInBillCard({ bill, expanded, onToggle }) {
 
         <div className="ad-order-summary-meta">
           <span className="ad-order-chip takeaway">Walk-in</span>
+          {isEdited && (
+            <span className="ad-order-chip" style={{ background: 'rgba(201,168,76,0.16)', color: '#7a4b0a', borderColor: 'rgba(201,168,76,0.3)' }}>
+              Edited{Number(bill.edit_count || 0) > 1 ? ` x${bill.edit_count}` : ''}
+            </span>
+          )}
           <span className="ad-order-chip">{itemCount} item{itemCount === 1 ? '' : 's'}</span>
           <span className="ad-order-total">{formatCurrency(total)}</span>
           <span className="ad-order-toggle">{isExpanded ? 'Hide details' : 'View details'}</span>
@@ -74,6 +81,21 @@ function WalkInBillCard({ bill, expanded, onToggle }) {
 
       {isExpanded && (
         <div className="ad-order-details ad-walk-details">
+          {isEdited && (
+            <section className="ad-order-section ad-order-section-wide" style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.26)' }}>
+              <div className="ad-order-section-head">
+                <h3>Edited Bill</h3>
+                <span>{Number(bill.edit_count || 0)} save{Number(bill.edit_count || 0) === 1 ? '' : 's'}</span>
+              </div>
+              <div className="ad-order-detail-grid">
+                <DetailItem label="Edited At" value={formatDateTime(bill.edited_at)} />
+                <DetailItem label="Edited By" value={bill.edited_by_name || 'Cashier'} />
+                <DetailItem label="Original Total" value={formatCurrency(bill.original_total_amount || bill.total_amount)} />
+                <DetailItem label="Current Total" value={formatCurrency(bill.total_amount)} />
+              </div>
+            </section>
+          )}
+
           <section className="ad-order-section ad-order-section-wide">
             <div className="ad-order-section-head">
               <h3>Bill Items</h3>
@@ -112,6 +134,31 @@ function WalkInBillCard({ bill, expanded, onToggle }) {
               <DetailItem label="Total Quantity" value={itemCount} />
             </div>
           </section>
+
+          {isEdited && originalItems.length > 0 && (
+            <section className="ad-order-section ad-order-section-wide">
+              <div className="ad-order-section-head">
+                <h3>Original Snapshot</h3>
+                <span>{originalItems.length} unique</span>
+              </div>
+              <div className="ad-order-lines">
+                {originalItems.map((item, index) => (
+                  <div key={`original-${bill.id}-${index}`} className="ad-order-line">
+                    <div>
+                      <div className="ad-order-line-name">{item.name || 'Item'}</div>
+                      <div className="ad-order-line-meta">
+                        <span>{Number(item.qty || 0)} x {formatCurrency(item.unit_price)}</span>
+                      </div>
+                    </div>
+                    <div className="ad-order-line-amount">
+                      <strong>x{Number(item.qty || 0)}</strong>
+                      <span>{formatCurrency(item.line_total)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="ad-order-section">
             <div className="ad-order-section-head">
@@ -163,7 +210,7 @@ export default function WalkInOrders() {
   const query = search.trim().toLowerCase()
   const displayedBills = query
     ? bills.filter((bill) => {
-        const matchesTopLevel = [bill.customer_name, bill.bill_number, bill.order_reference, bill.cashier_name]
+        const matchesTopLevel = [bill.customer_name, bill.bill_number, bill.order_reference, bill.cashier_name, bill.edited_by_name]
           .some((value) => (value || '').toLowerCase().includes(query))
         const matchesItems = (bill.items || []).some((item) =>
           (item.name || '').toLowerCase().includes(query)
@@ -174,6 +221,7 @@ export default function WalkInOrders() {
 
   const totalAmount = displayedBills.reduce((sum, bill) => sum + toAmount(bill.total_amount), 0)
   const totalItems = displayedBills.reduce((sum, bill) => sum + getBillItemCount(bill), 0)
+  const editedBills = displayedBills.filter((bill) => bill.is_edited || Number(bill.edit_count || 0) > 0 || bill.edited_at).length
 
   return (
     <div>
@@ -194,6 +242,10 @@ export default function WalkInOrders() {
         <div className="ad-stat-card" style={{ textAlign: 'center' }}>
           <p className="ad-stat-value">{formatCurrency(totalAmount)}</p>
           <p className="ad-stat-label" style={{ marginBottom: 0, marginTop: '4px' }}>Displayed Total</p>
+        </div>
+        <div className="ad-stat-card" style={{ textAlign: 'center' }}>
+          <p className="ad-stat-value">{editedBills}</p>
+          <p className="ad-stat-label" style={{ marginBottom: 0, marginTop: '4px' }}>Edited Bills</p>
         </div>
       </div>
 

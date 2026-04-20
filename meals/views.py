@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from email.mime.image import MIMEImage
 from pathlib import Path
@@ -52,6 +53,11 @@ PACKAGE_CANCEL_RULES = {
     'breakfast': {'day_offset': -1, 'time': time(21, 0)},
     'dinner': {'day_offset': 0, 'time': time(23, 0)},
 }
+DEFAULT_MEAL_TYPE_CUTOFFS = {
+    'Breakfast': time(20, 0),
+    'Lunch': time(8, 0),
+    'Dinner': time(12, 0),
+}
 
 
 def _money(value):
@@ -59,6 +65,54 @@ def _money(value):
         return Decimal(str(value)).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
     except (InvalidOperation, TypeError, ValueError):
         return Decimal('0.00')
+
+
+def _build_walkin_items_snapshot(raw_items):
+    if not isinstance(raw_items, (list, tuple)) or not raw_items:
+        raise ValueError('items is required.')
+
+    items_snapshot = []
+    total = Decimal('0.00')
+
+    for entry in raw_items:
+        name = str((entry or {}).get('name', '')).strip()
+
+        if not name:
+            raise ValueError('Each item must have a name.')
+
+        try:
+            qty = int((entry or {}).get('quantity', (entry or {}).get('qty', 0)))
+        except (TypeError, ValueError):
+            raise ValueError(f'Quantity for "{name}" must be a valid integer.')
+
+        try:
+            unit_price = Decimal(str((entry or {}).get('unit_price', 0)))
+        except (TypeError, ValueError, InvalidOperation):
+            raise ValueError(f'Unit price for "{name}" must be a valid number.')
+
+        if qty <= 0:
+            raise ValueError(f'Quantity for "{name}" must be greater than 0.')
+        if unit_price <= 0:
+            raise ValueError(f'Unit price for "{name}" must be greater than 0.')
+
+        unit_price = unit_price.quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
+        line_total = (unit_price * Decimal(qty)).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
+        total += line_total
+
+        snapshot = {
+            'name': name,
+            'qty': qty,
+            'unit_price': str(unit_price),
+            'line_total': str(line_total),
+        }
+
+        item_id = (entry or {}).get('item_id')
+        if item_id not in (None, ''):
+            snapshot['item_id'] = item_id
+
+        items_snapshot.append(snapshot)
+
+    return items_snapshot, total.quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
 
 
 def _validate_package_order_date(order_date):
@@ -72,6 +126,45 @@ def _validate_menu_item_order_time():
     now = timezone.localtime(timezone.now()).time()
     if now < MENU_ITEM_ORDER_OPEN_TIME or now > MENU_ITEM_LAST_ORDER_TIME:
         raise ValueError(MENU_ITEM_ORDER_HOURS_MESSAGE)
+
+
+def _normalize_meal_slot_name(meal_type):
+    return (getattr(meal_type, 'name', '') or '').strip().lower()
+
+
+def _validate_package_checkout_selection(validated_serializers):
+    package_serializers = [
+        serializer
+        for serializer in validated_serializers
+        if serializer.validated_data.get('order_type', 'package') == 'package'
+    ]
+    if not package_serializers:
+        return
+
+    package_dates = {
+        serializer.validated_data.get('order_date') or timezone.localdate()
+        for serializer in package_serializers
+    }
+    if len(package_dates) > 1:
+        raise ValueError(
+            'Meal package checkout can include only one meal date at a time. '
+            'Please choose packages for the same date only.'
+        )
+
+    meal_slots = {
+        _normalize_meal_slot_name(serializer.validated_data.get('meal_type'))
+        for serializer in package_serializers
+    }
+    if len(meal_slots) > 1:
+        raise ValueError(
+            'Meal package checkout can include only one meal slot at a time. '
+            'Please choose Breakfast, Lunch, or Dinner only for the selected date.'
+        )
+
+
+def _ensure_default_meal_types():
+    for name, cutoff in DEFAULT_MEAL_TYPE_CUTOFFS.items():
+        MealType.objects.get_or_create(name=name, defaults={'cutoff_time': cutoff})
 
 
 def _order_ready_message(order):
@@ -160,6 +253,10 @@ def _calculate_session_delivery_fee(validated_serializers):
         serializer.validated_data.get('order_type', 'package') == 'package'
         for serializer in validated_serializers
     )
+    has_item = any(
+        serializer.validated_data.get('order_type', 'package') == 'item'
+        for serializer in validated_serializers
+    )
     location_source = _single_batch_value(validated_serializers, 'location_source') or LOCATION_SOURCE_ADDRESS
     full_address = build_delivery_address(
         _single_batch_value(validated_serializers, 'address_line_1') or '',
@@ -171,7 +268,7 @@ def _calculate_session_delivery_fee(validated_serializers):
     longitude = _single_batch_value(validated_serializers, 'delivery_longitude')
     return calculate_delivery_quote(
         delivery_type=delivery_type,
-        has_package=has_package,
+        has_package=has_package and not has_item,
         location_source=location_source,
         full_address=full_address,
         city_area=city_area,
@@ -199,13 +296,16 @@ def _ordered_available_items():
 
 
 class MealTypeViewSet(viewsets.ModelViewSet):
-    queryset         = MealType.objects.all()
     serializer_class = MealTypeSerializer
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve'):
             return [IsAnyRole()]
         return [IsAdmin()]
+
+    def get_queryset(self):
+        _ensure_default_meal_types()
+        return MealType.objects.all()
 
 
 class MealPackageViewSet(viewsets.ModelViewSet):
@@ -245,6 +345,8 @@ class MealOrderView(APIView):
 
         if name == 'breakfast':
             cutoff_dt = datetime.combine(order_date - timedelta(days=1), datetime.strptime('20:00', '%H:%M').time())
+        elif name == 'lunch':
+            cutoff_dt = datetime.combine(order_date, datetime.strptime('08:00', '%H:%M').time())
         elif name == 'dinner':
             cutoff_dt = datetime.combine(order_date, datetime.strptime('12:00', '%H:%M').time())
         else:
@@ -373,6 +475,8 @@ class MealOrderBatchView(APIView):
         name = meal_type.name.lower()
         if name == 'breakfast':
             cutoff_dt = datetime.combine(order_date - timedelta(days=1), datetime.strptime('20:00', '%H:%M').time())
+        elif name == 'lunch':
+            cutoff_dt = datetime.combine(order_date, datetime.strptime('08:00', '%H:%M').time())
         elif name == 'dinner':
             cutoff_dt = datetime.combine(order_date, datetime.strptime('12:00', '%H:%M').time())
         else:
@@ -494,6 +598,11 @@ class MealOrderBatchView(APIView):
                 {'detail': 'All orders in the same checkout must use the same delivery longitude.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        try:
+            _validate_package_checkout_selection(validated_serializers)
+        except ValueError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             delivery_quote = _calculate_session_delivery_fee(validated_serializers)
@@ -1228,42 +1337,10 @@ class WalkInBillView(APIView):
     def post(self, request):
         raw_items     = request.data.get('items', [])
         customer_name = request.data.get('customer_name', '').strip()
-
-        if not raw_items:
-            return Response({'detail': 'items is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        items_snapshot = []
-        total = Decimal('0.00')
-        for entry in raw_items:
-            name = str(entry.get('name', '')).strip()
-
-            if not name:
-                return Response({'detail': 'Each item must have a name.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            try:
-                qty = int(entry.get('quantity', 0))
-            except (TypeError, ValueError):
-                return Response({'detail': f'Quantity for "{name}" must be a valid integer.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            try:
-                unit_price = Decimal(str(entry.get('unit_price', 0)))
-            except (TypeError, ValueError, InvalidOperation):
-                return Response({'detail': f'Unit price for "{name}" must be a valid number.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            if qty <= 0:
-                return Response({'detail': f'Quantity for "{name}" must be greater than 0.'}, status=status.HTTP_400_BAD_REQUEST)
-            if unit_price <= 0:
-                return Response({'detail': f'Unit price for "{name}" must be greater than 0.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            unit_price = unit_price.quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
-            line_total = (unit_price * Decimal(qty)).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
-            total += line_total
-            items_snapshot.append({
-                'name':       name,
-                'qty':        qty,
-                'unit_price': str(unit_price),
-                'line_total': str(line_total),
-            })
+        try:
+            items_snapshot, total = _build_walkin_items_snapshot(raw_items)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         bill = Bill.objects.create(
             meal_order    = None,
@@ -1272,6 +1349,7 @@ class WalkInBillView(APIView):
             source        = 'walk_in',
             customer_name = customer_name,
             items         = items_snapshot,
+            subtotal_amount = total,
             total_amount  = total.quantize(MONEY_SCALE, rounding=ROUND_HALF_UP),
             sent_to_email = '',
         )
@@ -1298,6 +1376,52 @@ class BillDetailView(APIView):
             bill = Bill.objects.select_related('cashier', 'meal_order').get(pk=pk)
         except Bill.DoesNotExist:
             return Response({'detail': 'Bill not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(BillSerializer(bill).data)
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        try:
+            bill = Bill.objects.select_related('cashier', 'edited_by').get(pk=pk)
+        except Bill.DoesNotExist:
+            return Response({'detail': 'Bill not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if bill.source != 'walk_in':
+            return Response({'detail': 'Only walk-in bills can be edited here.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            items_snapshot, total = _build_walkin_items_snapshot(request.data.get('items', []))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        customer_name = str(request.data.get('customer_name', bill.customer_name or '')).strip()
+        update_fields = [
+            'customer_name',
+            'items',
+            'subtotal_amount',
+            'total_amount',
+            'edited_by',
+            'edited_at',
+            'edit_count',
+        ]
+
+        if not bill.original_items:
+            bill.original_items = deepcopy(bill.items or [])
+            update_fields.append('original_items')
+
+        if bill.original_total_amount is None:
+            bill.original_total_amount = bill.total_amount
+            update_fields.append('original_total_amount')
+
+        bill.customer_name = customer_name
+        bill.items = items_snapshot
+        bill.subtotal_amount = total
+        bill.total_amount = total
+        bill.edited_by = request.user
+        bill.edited_at = timezone.now()
+        bill.edit_count = int(getattr(bill, 'edit_count', 0) or 0) + 1
+        bill.save(update_fields=update_fields)
+
+        bill.refresh_from_db()
         return Response(BillSerializer(bill).data)
 
 

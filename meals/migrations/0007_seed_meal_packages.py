@@ -162,14 +162,17 @@ def seed_packages(apps, schema_editor):
             )
             item_map[item_name] = obj
 
-    # 2. Ensure Breakfast and Dinner meal types exist
+    # 2. Ensure Breakfast, Lunch, and Dinner meal types exist
     breakfast, _ = MealType.objects.get_or_create(
         name='Breakfast', defaults={'cutoff_time': '20:00'}
+    )
+    lunch, _ = MealType.objects.get_or_create(
+        name='Lunch', defaults={'cutoff_time': '10:00'}
     )
     dinner, _ = MealType.objects.get_or_create(
         name='Dinner', defaults={'cutoff_time': '12:00'}
     )
-    type_map = {'Breakfast': breakfast, 'Dinner': dinner}
+    type_map = {'Breakfast': breakfast, 'Lunch': lunch, 'Dinner': dinner}
 
     # 3. Create packages
     for day, meal_type_name, name, desc, is_veg, item_names in PACKAGES:

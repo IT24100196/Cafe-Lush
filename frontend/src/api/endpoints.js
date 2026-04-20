@@ -103,5 +103,6 @@ export const generateWalkInBill = (data)         => api.post('/meals/bills/walk-
 export const getWalkInBills     = ()             => api.get('/meals/bills/walk-in/list/')
 export const getBillPrint       = (billId)       => api.get(`/meals/bills/${billId}/print/`)
 export const getBillDetail      = (billId)       => api.get(`/meals/bills/${billId}/`)
+export const updateWalkInBill   = (billId, data) => api.patch(`/meals/bills/${billId}/`, data)
 export const getBillPdf         = (billId)       => `${api.defaults.baseURL}/meals/bills/${billId}/pdf/`
 export const sendBillEmail      = (billId, email) => api.post(`/meals/bills/${billId}/send-email/`, { email })

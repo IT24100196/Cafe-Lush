@@ -37,7 +37,6 @@ export default function MonthlyReport() {
   const expenseRows = report ? [
     ['Manual Expenses', fmt(report.manual_outcome)],
   ] : []
-
   const totalIncome  = report ? ['Meal Order Income','POS Sales Income','Event Income','Manual Income']
     .reduce((s, _, i) => s + parseFloat([report.meal_income, report.pos_income, report.event_income, report.manual_income][i] || 0), 0) : 0
   const totalExpense = report ? parseFloat(report.manual_outcome || 0) : 0
@@ -160,7 +159,6 @@ export default function MonthlyReport() {
       `<tr><td style="${tdStyle}">${l}</td><td style="${tdR}">${v}</td></tr>`).join('')
     const expenseTableRows = expenseRows.map(([l, v]) =>
       `<tr><td style="${tdStyle}">${l}</td><td style="${tdR}">${v}</td></tr>`).join('')
-
     const netColor = netProfit >= 0 ? '#16a34a' : '#dc2626'
 
     const html = `

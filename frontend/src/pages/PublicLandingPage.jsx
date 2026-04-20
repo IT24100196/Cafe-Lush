@@ -48,18 +48,26 @@ const FEATURES = [
 
 const PACKAGES = [
   {
+    theme: 'veg',
     icon: Sunrise,
     title: 'Breakfast Package',
-    desc: 'Start your day right with a freshly prepared breakfast. Includes a full Sri Lankan or continental spread.',
+    eyebrow: 'Sunrise favorite',
+    desc: 'Start your day with a freshly prepared veg rice and curry meal made for a light, satisfying morning.',
     badge: 'Order before 8:00 PM previous day',
-    badgeColor: 'bg-amber-100 text-amber-800',
+    label: 'Veg Rice & Curry',
+    image: '/image/meal-breakfast-veg-hero.png',
+    imageAlt: 'Veg rice and curry breakfast plate',
   },
   {
+    theme: 'nonveg',
     icon: MoonStar,
     title: 'Dinner Package',
-    desc: 'End your day with a satisfying dinner crafted by our experienced kitchen team.',
+    eyebrow: 'Chef-crafted dinner',
+    desc: 'End your day with a satisfying non-veg dinner crafted by our experienced kitchen team.',
     badge: 'Order before 12:00 PM same day',
-    badgeColor: 'bg-blue-100 text-blue-800',
+    label: 'Non-Veg Rice & Curry',
+    image: '/image/meal-dinner-nonveg-hero.png',
+    imageAlt: 'Non-veg rice and curry dinner plate',
   },
 ]
 
@@ -272,38 +280,64 @@ function Features() {
 // ── Meal Packages ─────────────────────────────────────────────────────────────
 function MealPackages() {
   return (
-    <section id="packages" className="bg-cream-dark py-20 px-4">
+    <section id="packages" className="landing-packages-section py-20 px-4">
       <div className="max-w-5xl mx-auto">
         <div className="text-center mb-14">
           <p className="font-inter text-gold text-sm font-medium tracking-[0.25em] uppercase mb-3">Daily Offerings</p>
           <h2 className="font-playfair font-bold text-brown text-3xl sm:text-4xl">Our Meal Packages</h2>
+          <p className="mx-auto mt-4 max-w-2xl font-inter text-sm leading-relaxed text-brown/60">
+            Curated breakfast and dinner plates, presented with a little more drama and a lot more appetite.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-          {PACKAGES.map(({ icon, title, desc, badge, badgeColor }) => {
+          {PACKAGES.map(({ theme, icon, title, eyebrow, desc, badge, label, image, imageAlt }, index) => {
             const PackageIcon = icon
             return (
-            <div key={title} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-cream-dark hover:shadow-xl transition-all duration-300 group">
-              <div className="h-1.5 bg-gradient-to-r from-gold to-gold-light" />
-              <div className="p-8">
-                <div className="mb-5">
-                  <PackageIcon className="w-12 h-12 text-gold" strokeWidth={2.2} />
+            <article
+              key={title}
+              className={`landing-package-card landing-package-card-${theme}`}
+              style={{ animationDelay: `${index * 140}ms` }}
+            >
+              <div className="landing-package-stage">
+                <div className="landing-package-media-wrap">
+                  <img
+                    src={image}
+                    alt={imageAlt}
+                    className="landing-package-media"
+                    loading="lazy"
+                  />
+                  <div className="landing-package-media-scrim" />
+                  <div className="landing-package-media-mask" />
                 </div>
-                <h3 className="font-playfair font-bold text-brown text-2xl mb-3">{title}</h3>
-                <p className="font-inter text-brown/60 text-sm leading-relaxed mb-5">{desc}</p>
-                <span className={`inline-block text-xs font-inter font-semibold px-3 py-1.5 rounded-full mb-6 ${badgeColor}`}>
-                  ⏰ {badge}
-                </span>
-                <div>
+                <div className={`landing-package-label landing-package-label-${theme}`}>
+                  <PackageIcon className="h-4 w-4" strokeWidth={2.1} />
+                  <span>{label}</span>
+                </div>
+              </div>
+
+              <div className="landing-package-content">
+                <div className="landing-package-copy">
+                  <p className="landing-package-eyebrow">{eyebrow}</p>
+                  <h3 className="landing-package-title">{title}</h3>
+                  <p className="landing-package-desc">{desc}</p>
+                </div>
+
+                <div className="landing-package-meta">
+                  <span className={`landing-package-badge landing-package-badge-${theme}`}>{badge}</span>
+                </div>
+
+                <div className="landing-package-actions">
                   <Link
                     to="/login"
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-brown text-gold font-inter font-semibold text-sm hover:bg-brown-light transition-colors group-hover:bg-gold group-hover:text-brown"
+                    className="landing-package-cta"
                   >
-                    Order Now <ArrowRight className="w-4 h-4" />
+                    <span>Order Now</span>
+                    <ArrowRight className="landing-package-cta-arrow h-4 w-4" />
                   </Link>
                 </div>
               </div>
-            </div>
+            </article>
             )
           })}
         </div>

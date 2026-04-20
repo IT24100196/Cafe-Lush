@@ -16,6 +16,7 @@ from .models import MealType, MealOrder, Student, Notification, MealPackage, Bil
 
 PACKAGE_READY_TIMES = {
     'breakfast': '07:30 AM',
+    'lunch': '12:30 PM',
     'dinner': '07:00 PM',
 }
 MAX_PACKAGE_QUANTITY = 10
@@ -284,6 +285,8 @@ class SuggestionSerializer(serializers.ModelSerializer):
 class BillSerializer(serializers.ModelSerializer):
     order_reference = serializers.SerializerMethodField()
     cashier_name = serializers.CharField(source='cashier.username', read_only=True)
+    edited_by_name = serializers.CharField(source='edited_by.username', read_only=True)
+    is_edited = serializers.SerializerMethodField()
 
     def get_order_reference(self, obj):
         if obj.order_reference:
@@ -296,9 +299,15 @@ class BillSerializer(serializers.ModelSerializer):
             return build_walkin_order_reference(obj, cache=cache)
         return ''
 
+    def get_is_edited(self, obj):
+        return bool(getattr(obj, 'edit_count', 0) or getattr(obj, 'edited_at', None))
+
     class Meta:
         model  = Bill
         fields = ['id', 'bill_number', 'order_reference', 'source', 'customer_name', 'meal_order',
                   'cashier', 'cashier_name',
                   'items', 'delivery_type', 'delivery_address', 'phone_number',
-                  'subtotal_amount', 'delivery_fee', 'total_amount', 'sent_to_email', 'generated_at']
+                  'subtotal_amount', 'delivery_fee', 'total_amount',
+                  'original_items', 'original_total_amount',
+                  'edited_by', 'edited_by_name', 'edited_at', 'edit_count', 'is_edited',
+                  'sent_to_email', 'generated_at']

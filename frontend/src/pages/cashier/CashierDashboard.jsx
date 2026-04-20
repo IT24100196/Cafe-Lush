@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth } from '../../context/authContextCore'
-import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getItems, getCategories, updateOrderStatus, updateOrderSessionStatus } from '../../api/endpoints'
+import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getItems, getCategories, updateOrderStatus, updateOrderSessionStatus, updateWalkInBill } from '../../api/endpoints'
 import { Spinner, EmptyState } from '../../components/UI'
 import { useOrderSocket } from '../../hooks/useOrderSocket'
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
@@ -18,11 +18,12 @@ function ConfirmDialog({
   cancelLabel = 'Cancel',
   onConfirm,
   onCancel,
+  zIndex = 1400,
 }) {
   useBodyScrollLock()
 
   return createPortal(
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex }}>
       <div style={{ background: '#fff', borderRadius: '12px', padding: '28px 32px', maxWidth: '360px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', textAlign: 'center' }}>
         <div style={{ fontSize: '32px', marginBottom: '12px' }}>🗑️</div>
         <div style={{ fontWeight: 700, fontSize: '15px', color: '#2C1A0E', marginBottom: '8px' }}>{title}</div>
@@ -54,6 +55,58 @@ function formatLocalDateKey(value = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function normalizeWalkInBillForHistory(bill) {
+  return {
+    id: `bill-${bill.id}`,
+    bill_pk: bill.id,
+    bill_id: bill.bill_number,
+    order_reference: bill.order_reference || '',
+    source: bill.source || 'walk_in',
+    created_at: bill.generated_at,
+    total_amount: bill.total_amount,
+    subtotal_amount: bill.subtotal_amount,
+    cashier_name: bill.cashier_name || '',
+    customer_name: bill.customer_name || '',
+    is_edited: Boolean(bill.is_edited || Number(bill.edit_count || 0) > 0 || bill.edited_at),
+    edited_at: bill.edited_at || '',
+    edited_by_name: bill.edited_by_name || '',
+    edit_count: Number(bill.edit_count || 0),
+    original_total_amount: bill.original_total_amount,
+    original_items: Array.isArray(bill.original_items) ? bill.original_items : [],
+    order_items: Array.isArray(bill.items) ? bill.items.map((it, i) => ({
+      id: i,
+      item_id: it.item_id ?? null,
+      item_name: it.name,
+      quantity: it.qty,
+      unit_price: it.unit_price,
+      line_total: it.line_total,
+    })) : [],
+  }
+}
+
+function buildWalkInBillStateFromHistoryOrder(order) {
+  return (order.order_items || []).reduce((acc, line, index) => {
+    const fallbackId = `history-${order.bill_pk || 'bill'}-${index}`
+    const itemId = line.item_id ?? fallbackId
+    acc[itemId] = {
+      item: {
+        id: itemId,
+        item_id: line.item_code || '',
+        name: line.item_name || 'Item',
+        price: Number(line.unit_price || 0),
+        image_url: '',
+        is_available: true,
+      },
+      qty: Math.max(1, Number(line.quantity || 1)),
+    }
+    return acc
+  }, {})
+}
+
+function getWalkInPayloadItemId(itemId) {
+  return String(itemId).startsWith('history-') ? null : itemId
 }
 
 function buildOrderToast(source = {}) {
@@ -176,8 +229,304 @@ function BillReceipt({ order, innerRef }) {
   )
 }
 
+function EditWalkInBillModal({ order, onClose, onSaved }) {
+  useBodyScrollLock()
+
+  const [allItems, setAllItems] = useState([])
+  const [categories, setCategories] = useState([])
+  const [loadingMenu, setLoadingMenu] = useState(true)
+  const [search, setSearch] = useState('')
+  const [activeCat, setActiveCat] = useState('all')
+  const [customerName, setCustomerName] = useState(order.customer_name || '')
+  const [bill, setBill] = useState(() => buildWalkInBillStateFromHistoryOrder(order))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [pendingRemoveLine, setPendingRemoveLine] = useState(null)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    Promise.all([getItems(), getCategories()])
+      .then(([itemsRes, catsRes]) => {
+        if (!alive) return
+        setAllItems(Array.isArray(itemsRes.data) ? itemsRes.data : [])
+        setCategories(Array.isArray(catsRes.data) ? catsRes.data : [])
+      })
+      .catch(() => {
+        if (!alive) return
+        setError('Failed to load menu items for editing.')
+      })
+      .finally(() => {
+        if (alive) setLoadingMenu(false)
+      })
+    return () => { alive = false }
+  }, [])
+
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return allItems
+      .filter((item) => item.is_available)
+      .filter((item) => activeCat === 'all' || item.category === Number(activeCat))
+      .filter((item) => {
+        if (!q) return true
+        return (item.name || '').toLowerCase().includes(q) || (item.item_id || '').toLowerCase().includes(q)
+      })
+      .sort(compareMenuItemsByCode)
+  }, [allItems, activeCat, search])
+
+  const billLines = Object.values(bill)
+  const totalQuantity = billLines.reduce((sum, line) => sum + Number(line.qty || 0), 0)
+  const totalAmount = billLines.reduce((sum, line) => sum + Number(line.item?.price || 0) * Number(line.qty || 0), 0)
+
+  const addItem = (item) => {
+    setBill((prev) => ({
+      ...prev,
+      [item.id]: prev[item.id]
+        ? { ...prev[item.id], qty: prev[item.id].qty + 1 }
+        : { item, qty: 1 },
+    }))
+    setError('')
+  }
+
+  const setQty = (itemId, qtyValue) => {
+    const qty = Math.max(1, Number.parseInt(qtyValue, 10) || 1)
+    setBill((prev) => ({ ...prev, [itemId]: { ...prev[itemId], qty } }))
+  }
+
+  const removeLine = (itemId) => {
+    setBill((prev) => {
+      const { [itemId]: _, ...rest } = prev
+      return rest
+    })
+  }
+
+  const handleDecrease = (item, qty) => {
+    if (qty > 1) {
+      setQty(item.id, qty - 1)
+      return
+    }
+    setPendingRemoveLine(item)
+  }
+
+  const clearBill = () => {
+    setBill({})
+    setError('')
+    setPendingRemoveLine(null)
+    setShowClearConfirm(false)
+  }
+
+  const handleSave = async () => {
+    if (!billLines.length) {
+      setError('Add at least one item before saving the bill.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+    try {
+      const payload = {
+        customer_name: customerName.trim(),
+        items: billLines.map(({ item, qty }) => ({
+          item_id: getWalkInPayloadItemId(item.id),
+          name: item.name,
+          quantity: qty,
+          unit_price: Number(item.price || 0),
+        })),
+      }
+      const { data } = await updateWalkInBill(order.bill_pk, payload)
+      onSaved?.(normalizeWalkInBillForHistory(data))
+      onClose?.()
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save bill changes.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return createPortal(
+    <div className="cd-editbill-overlay">
+      <div className="cd-editbill-modal">
+        <div className="cd-editbill-header">
+          <div>
+            <div className="cd-editbill-eyebrow">Walk-in bill editor</div>
+            <div className="cd-editbill-title">Edit {order.bill_id || 'Bill'}</div>
+            <div className="cd-editbill-subtitle">Update items and quantities, then save the corrected bill.</div>
+          </div>
+          <button type="button" className="cd-editbill-close" onClick={onClose} aria-label="Close editor">X</button>
+        </div>
+
+        <div className="cd-editbill-layout">
+          <div className="cd-editbill-browser">
+            <div className="cd-products-col">
+              <div className="cd-editbill-customer">
+                <label>Customer Name</label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Optional"
+                />
+              </div>
+
+              <div className="cd-editbill-browser-scroll">
+                <div className="cd-search-wrap">
+                  <input
+                    className="cd-search"
+                    type="text"
+                    placeholder="Search items..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+
+                <div className="cd-cat-row">
+                  <button
+                    className={`cd-cat-pill${activeCat === 'all' ? ' active' : ''}`}
+                    onClick={() => setActiveCat('all')}
+                  >
+                    All
+                  </button>
+                  {categories.map((category) => (
+                    <button
+                      key={category.id}
+                      className={`cd-cat-pill${activeCat === String(category.id) ? ' active' : ''}`}
+                      onClick={() => setActiveCat(String(category.id))}
+                    >
+                      {category.name}
+                    </button>
+                  ))}
+                </div>
+
+                {loadingMenu ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
+                    <Spinner />
+                  </div>
+                ) : filteredItems.length === 0 ? (
+                  <EmptyState message={search ? `No items match "${search}".` : 'No items available.'} />
+                ) : (
+                  <div className="cd-items-grid cd-editbill-items-grid">
+                    {filteredItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="cd-item-card"
+                        data-item-name={item.name}
+                        onClick={() => addItem(item)}
+                      >
+                        {item.image_url
+                          ? <img src={item.image_url} alt={item.name} className="cd-item-img" />
+                          : <div className="cd-item-placeholder">+</div>
+                        }
+                        <div className="cd-item-body">
+                          {item.item_id && <div className="cd-item-id">{item.item_id}</div>}
+                          <div className="cd-item-name">{item.name}</div>
+                          <div className="cd-item-price">Rs.{parseFloat(item.price).toFixed(2)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="cd-bill-panel cd-editbill-panel">
+            <div className="cd-bill-header">
+              <div>
+                <span className="cd-bill-title">Updated Bill</span>
+                <span className="cd-bill-subtitle">Changes will replace the saved walk-in bill</span>
+              </div>
+              {totalQuantity > 0 && <span className="cd-bill-count">{totalQuantity} items</span>}
+            </div>
+
+            <div className="cd-bill-items">
+              {error && <div className="cd-alert-error">{error}</div>}
+
+              {billLines.length === 0 ? (
+                <div className="cd-bill-empty">
+                  <div className="cd-bill-empty-icon">+</div>
+                  <div className="cd-bill-empty-text">Add items from the left to rebuild this bill</div>
+                </div>
+              ) : (
+                billLines.map(({ item, qty }) => (
+                  <div key={item.id} className="cd-bill-row">
+                    <div className="cd-bill-row-info">
+                      <div className="cd-bill-row-name">{item.name}</div>
+                      <div className="cd-bill-row-qty-line">Rs.{Number(item.price || 0).toFixed(2)} each</div>
+                      <div className="cd-bill-qty-controls">
+                        <button type="button" className="cd-bill-qty-btn" onClick={() => handleDecrease(item, qty)}>-</button>
+                        <span className="cd-bill-qty-num">{qty}</span>
+                        <button type="button" className="cd-bill-qty-btn" onClick={() => setQty(item.id, qty + 1)}>+</button>
+                      </div>
+                    </div>
+                    <div className="cd-bill-row-right">
+                      <span className="cd-bill-row-price">Rs.{(Number(item.price || 0) * Number(qty || 0)).toFixed(2)}</span>
+                      <button type="button" className="cd-bill-remove" onClick={() => setPendingRemoveLine(item)}>X</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="cd-bill-footer">
+              <div className="cd-bill-summary">
+                <div className="cd-bill-summary-row">
+                  <span>Unique items</span>
+                  <strong>{billLines.length}</strong>
+                </div>
+                <div className="cd-bill-summary-row">
+                  <span>Total quantity</span>
+                  <strong>{totalQuantity}</strong>
+                </div>
+              </div>
+              <div className="cd-bill-divider" />
+              <div className="cd-bill-total-row">
+                <span className="cd-bill-total-label">TOTAL</span>
+                <span className="cd-bill-total-val">Rs.{totalAmount.toFixed(2)}</span>
+              </div>
+              <div className="cd-editbill-actions">
+                <button type="button" className="cd-btn-clear" onClick={() => setShowClearConfirm(true)} disabled={saving || billLines.length === 0}>Clear Bill</button>
+                <button type="button" className="cd-btn-create" onClick={handleSave} disabled={saving}>
+                  {saving ? 'Saving changes...' : 'Save Bill Changes'}
+                </button>
+              </div>
+              <button type="button" className="cd-btn-clear cd-editbill-cancel" onClick={onClose} disabled={saving}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {pendingRemoveLine && (
+        <ConfirmDialog
+          title="Remove item?"
+          message={`Do you want to remove ${pendingRemoveLine.name} from this bill?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          zIndex={1401}
+          onConfirm={() => {
+            removeLine(pendingRemoveLine.id)
+            setPendingRemoveLine(null)
+          }}
+          onCancel={() => setPendingRemoveLine(null)}
+        />
+      )}
+      {showClearConfirm && (
+        <ConfirmDialog
+          title="Clear edited bill?"
+          message="Do you want to remove all items from this edited bill?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          zIndex={1401}
+          onConfirm={clearBill}
+          onCancel={() => setShowClearConfirm(false)}
+        />
+      )}
+    </div>,
+    document.body
+  )
+}
+
 // ── Bill History Panel ────────────────────────────────────────────────────────
-function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, summary, onClear }) {
+function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, summary, onClear, onBillUpdated }) {
   const [showConfirm, setShowConfirm] = useState(false)
   const [search, setSearch] = useState('')
 
@@ -187,7 +536,11 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
   const filteredOrders = search.trim()
     ? orders.filter((o) => {
         const q = search.trim().toLowerCase()
-        return (o.bill_id || '').toLowerCase().includes(q) || (o.order_reference || '').toLowerCase().includes(q)
+        return (
+          (o.bill_id || '').toLowerCase().includes(q) ||
+          (o.order_reference || '').toLowerCase().includes(q) ||
+          (o.customer_name || '').toLowerCase().includes(q)
+        )
       })
     : orders
 
@@ -222,7 +575,7 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
       <div style={{ padding: '0 0 12px 0' }}>
         <input
           type="text"
-          placeholder="Search by Order Ref or Bill No (Internal)"
+          placeholder="Search by customer, order ref, or bill no"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{
@@ -255,7 +608,12 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
       ) : (
         <div className="cd-history-list">
           {filteredOrders.map((order) => (
-            <HistoryRow key={order.id} order={order} billNum={orders.length - orders.indexOf(order)} />
+            <HistoryRow
+              key={order.id}
+              order={order}
+              billNum={orders.length - orders.indexOf(order)}
+              onBillUpdated={onBillUpdated}
+            />
           ))}
         </div>
       )}
@@ -263,14 +621,19 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
   )
 }
 
-function HistoryRow({ order, billNum }) {
+function HistoryRow({ order, billNum, onBillUpdated }) {
   const [expanded, setExpanded] = useState(false)
+  const [editing, setEditing] = useState(false)
   const printRef = useRef()
   const handlePrint = useReactToPrint({ contentRef: printRef })
 
   const createdAt = new Date(order.created_at)
   const dateStr = createdAt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   const timeStr = createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  const editedStamp = order.edited_at ? new Date(order.edited_at) : null
+  const editedLabel = editedStamp && !Number.isNaN(editedStamp.getTime())
+    ? editedStamp.toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
   const billLabel = order.bill_id || `Bill #${String(billNum).padStart(3, '0')}`
   const orderRef = order.order_reference || '-'
   const primaryLabel = orderRef !== '-' ? orderRef : billLabel
@@ -285,8 +648,14 @@ function HistoryRow({ order, billNum }) {
           {orderRef !== '-' && (
             <span style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>Bill No (Internal): {billLabel}</span>
           )}
+          {order.is_edited && (
+            <span className="cd-hbill-edited-note">
+              Edited{order.edit_count > 1 ? ` ${order.edit_count} times` : ''}{order.edited_by_name ? ` by ${order.edited_by_name}` : ''}{editedLabel ? ` on ${editedLabel}` : ''}
+            </span>
+          )}
         </div>
         <div className="cd-hbill-header-right">
+          {order.is_edited && <span className="cd-hbill-edited-badge">Edited</span>}
           <span className="cd-hbill-total">Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
           <span className="cd-hbill-chevron">{expanded ? '▲' : '▼'}</span>
         </div>
@@ -307,14 +676,23 @@ function HistoryRow({ order, billNum }) {
           <div className="cd-hbill-divider" />
           <div className="cd-hbill-subtotal-row">
             <span>Subtotal</span>
-            <span>Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
+            <span>Rs.{parseFloat(order.subtotal_amount ?? order.total_amount).toFixed(2)}</span>
           </div>
+          {order.is_edited && order.original_total_amount && (
+            <div className="cd-hbill-subtotal-row">
+              <span>Original total</span>
+              <span>Rs.{parseFloat(order.original_total_amount).toFixed(2)}</span>
+            </div>
+          )}
           <div className="cd-hbill-total-row">
             <span className="cd-hbill-total-label">TOTAL</span>
             <span className="cd-hbill-total-val">Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
           </div>
           <div className="cd-hbill-footer">
             {order.cashier_name && <span className="cd-hbill-cashier">Cashier: {order.cashier_name}</span>}
+            {order.source === 'walk_in' && (
+              <button className="cd-hbill-edit-btn" onClick={() => setEditing(true)}>Edit Bill</button>
+            )}
             <button className="cd-hbill-print-btn" onClick={handlePrint}>🖨️ Print Receipt</button>
           </div>
         </div>
@@ -323,6 +701,14 @@ function HistoryRow({ order, billNum }) {
       <div style={{ display: 'none' }}>
         <BillReceipt order={order} innerRef={printRef} />
       </div>
+
+      {editing && order.source === 'walk_in' && (
+        <EditWalkInBillModal
+          order={order}
+          onClose={() => setEditing(false)}
+          onSaved={onBillUpdated}
+        />
+      )}
     </div>
   )
 }
@@ -676,18 +1062,6 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       .sort((a, b) => getOnlineSessionSortTimestamp(b) - getOnlineSessionSortTimestamp(a))
   }, [orders, hiddenKeys, statusFilter, typeFilter])
 
-  const groupedOrders = useMemo(() => {
-    const grouped = {}
-    ONLINE_STATUS_GROUPS.forEach(({ key }) => {
-      grouped[key] = { item: [], package: [], combined: [] }
-    })
-    visibleOrders.forEach((session) => {
-      if (!grouped[session.status]) grouped[session.status] = { item: [], package: [], combined: [] }
-      grouped[session.status][session.orderGroup].push(session)
-    })
-    return grouped
-  }, [visibleOrders])
-
   const counts = useMemo(() => {
     const visible = orders
       .filter((session) => !hiddenKeys.has(sessionKey(session)))
@@ -874,7 +1248,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       <div className="cd-history-topbar">
         <div>
           <div className="cd-history-heading">Online Orders</div>
-          <div className="cd-history-subheading">Live student orders grouped by status and order type</div>
+          <div className="cd-history-subheading">Live student orders with the latest online order first</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {newBadge > 0 && (
@@ -963,31 +1337,9 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
         </div>
       ) : (
         <div className="cd-history-list">
-          {ONLINE_STATUS_GROUPS.map((statusGroup) => {
-            const statusHasOrders = ONLINE_TYPE_GROUPS.some((typeGroup) => groupedOrders[statusGroup.key]?.[typeGroup.key]?.length)
-            if (!statusHasOrders) return null
-            return (
-              <section key={statusGroup.key} style={{ marginBottom: '18px' }}>
-                <div style={{ fontWeight: 900, color: 'var(--espresso)', fontSize: '14px', margin: '4px 0 10px' }}>
-                  {statusGroup.label}
-                </div>
-                {ONLINE_TYPE_GROUPS.map((typeGroup) => {
-                  const sessions = groupedOrders[statusGroup.key]?.[typeGroup.key] || []
-                  if (sessions.length === 0) return null
-                  return (
-                    <div key={`${statusGroup.key}-${typeGroup.key}`} style={{ marginBottom: '14px' }}>
-                      <div style={{ fontSize: '11px', fontWeight: 900, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
-                        {typeGroup.label} ({sessions.length})
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                        {sessions.map((session, idx) => renderSessionCard(session, idx))}
-                      </div>
-                    </div>
-                  )
-                })}
-              </section>
-            )
-          })}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {visibleOrders.map((session, idx) => renderSessionCard(session, idx))}
+          </div>
         </div>
       )}
 
@@ -1446,6 +1798,7 @@ function WalkinSaleTab({ onBillCreated }) {
       const payload = {
         customer_name: customerName.trim(),
         items: billLines.map((l) => ({
+          item_id:    l.item.id,
           name:       l.item.name,
           quantity:   l.qty,
           unit_price: parseFloat(l.item.price),
@@ -1877,25 +2230,9 @@ export default function CashierDashboard() {
         getWalkInBills(),
         getDailySummary(date),
       ])
-      // Normalize walk-in Bills into the same shape as PosOrder
       const walkInNormalized = billsRes.data
         .filter((b) => formatLocalDateKey(b.generated_at) === date)
-        .map((b) => ({
-          id:           `bill-${b.id}`,
-          bill_id:      b.bill_number,
-          order_reference: b.order_reference || '',
-          source:       b.source || 'walk_in',
-          created_at:   b.generated_at,
-          total_amount: b.total_amount,
-          cashier_name: b.cashier_name || '',
-          order_items:  b.items.map((it, i) => ({
-            id:         i,
-            item_name:  it.name,
-            quantity:   it.qty,
-            unit_price: it.unit_price,
-            line_total: it.line_total,
-          })),
-        }))
+        .map(normalizeWalkInBillForHistory)
       const merged = [...ordersRes.data, ...walkInNormalized]
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       setHistoryOrders(merged)
@@ -1988,6 +2325,7 @@ export default function CashierDashboard() {
               loadingOrders={historyLoading}
               summary={historySummary}
               onClear={() => { setHistoryOrders([]); setHistorySummary(null) }}
+              onBillUpdated={() => fetchHistory(historyDate)}
             />
           ) : activeTab === 'online' ? (
             <OnlineOrdersPanel
@@ -2005,22 +2343,7 @@ export default function CashierDashboard() {
             />
           ) : (
             <WalkinSaleTab onBillCreated={(data) => {
-              const normalized = {
-                id:           `bill-${data.id}`,
-                bill_id:      data.bill_number,
-                order_reference: data.order_reference || '',
-                source:       data.source || 'walk_in',
-                created_at:   data.generated_at,
-                total_amount: data.total_amount,
-                cashier_name: data.cashier_name || '',
-                order_items:  data.items.map((it, i) => ({
-                  id:         i,
-                  item_name:  it.name,
-                  quantity:   it.qty,
-                  unit_price: it.unit_price,
-                  line_total: it.line_total,
-                })),
-              }
+              const normalized = normalizeWalkInBillForHistory(data)
               setHistoryOrders((prev) => [normalized, ...prev])
               setHistorySummary((prev) => ({
                 ...(prev || { date: today, total_orders: 0, total_sales: 0 }),

@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import {
   Bell,
   BookOpen,
-  CalendarDays,
   ChefHat,
   Clock3,
   Coffee,
@@ -116,6 +115,74 @@ function formatDeliveryAddress({ addressLine1 = '', addressLine2 = '', cityArea 
     .join(', ')
 }
 
+function normalizeMealSlotName(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return ''
+  if (normalized.includes('breakfast')) return 'breakfast'
+  if (normalized.includes('dinner')) return 'dinner'
+  if (normalized.includes('lunch')) return 'lunch'
+  return normalized
+}
+
+const POPULAR_PREVIEW_ITEM_ORDER = [
+  ['veg paneer string hoppers kottu'],
+  ['prawn noodles'],
+  ['chicken noodles soup', 'chicken noodels soup'],
+  ['chicken sausages sandwich with cheese', 'chicken sausage sandwich with cheese'],
+  ['butter milk', 'buttermilk'],
+  ['vanila waffle with fruit nuts', 'vanilla waffle with fruit nuts', 'vanila waffle(with fruit/nuts)', 'vanilla waffle(with fruit/nuts)'],
+]
+
+function normalizeCategoryLabel(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function normalizePreviewItemName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildPopularPreviewItems(items = []) {
+  const withImages = items.filter((item) => item.image_url)
+  if (withImages.length === 0) return []
+
+  const usedItemIds = new Set()
+  const selected = []
+
+  POPULAR_PREVIEW_ITEM_ORDER.forEach((nameOptions) => {
+    const match = withImages.find((item) => {
+      const normalizedName = normalizePreviewItemName(item.name)
+      return !usedItemIds.has(item.id) && nameOptions.some((candidate) => normalizePreviewItemName(candidate) === normalizedName)
+    })
+
+    if (!match) return
+    selected.push(match)
+    usedItemIds.add(match.id)
+  })
+
+  if (selected.length >= 6) return selected.slice(0, 6)
+
+  const usedCategories = new Set(selected.map((item) => normalizeCategoryLabel(item.category_name)))
+
+  withImages.forEach((item) => {
+    if (selected.length >= 6) return
+    const normalizedCategory = normalizeCategoryLabel(item.category_name)
+    if (usedItemIds.has(item.id) || usedCategories.has(normalizedCategory)) return
+    selected.push(item)
+    usedItemIds.add(item.id)
+    usedCategories.add(normalizedCategory)
+  })
+
+  return selected.slice(0, 6)
+}
+
 function normalizeAreaSearchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -125,8 +192,9 @@ function normalizeAreaSearchText(value) {
 }
 
 function getPackageReadyTime(mealTypeName) {
-  const normalized = String(mealTypeName || '').trim().toLowerCase()
+  const normalized = normalizeMealSlotName(mealTypeName)
   if (normalized === 'breakfast') return '7:30 AM'
+  if (normalized === 'lunch') return '12:30 PM'
   if (normalized === 'dinner') return '7:00 PM'
   return ''
 }
@@ -141,6 +209,78 @@ function getPackageReadyText(mealTypeName) {
 const MENU_ITEM_ORDER_HOURS_MESSAGE = 'Menu item orders are available from 4:00 AM to 11:30 PM.'
 const SHOP_CLOSED_DIALOG_MESSAGE = 'Cafe Lush is closed for menu item orders right now. Orders are available from 4:00 AM to 11:30 PM. Please come back during opening hours.'
 const MAX_PACKAGE_QUANTITY = 10
+const MEAL_CARD_IMAGES = {
+  breakfast: {
+    defaultPreference: 'veg',
+    image: '/image/meal-breakfast-veg-hero.png',
+    label: 'Veg Rice & Curry',
+  },
+  dinner: {
+    defaultPreference: 'non-veg',
+    image: '/image/meal-dinner-nonveg-hero.png',
+    label: 'Non-Veg Rice & Curry',
+  },
+}
+
+const PACKAGE_CATEGORY_META = {
+  veg: {
+    title: 'Veg Rice & Curry',
+    image: '/image/meal-breakfast-veg-hero.png',
+    badge: 'Veg Packages',
+    icon: Vegan,
+  },
+  nonveg: {
+    title: 'Non-Veg Rice & Curry',
+    image: '/image/meal-dinner-nonveg-hero.png',
+    badge: 'Non-Veg Packages',
+    icon: ChefHat,
+  },
+}
+
+const PACKAGE_MEAL_META = {
+  breakfast: {
+    label: 'Breakfast',
+    icon: Sun,
+  },
+  lunch: {
+    label: 'Lunch',
+    icon: HandPlatter,
+  },
+  dinner: {
+    label: 'Dinner',
+    icon: MoonStar,
+  },
+}
+
+function getPackageTimingDetails(mealTime) {
+  const normalized = String(mealTime || '').trim().toLowerCase()
+  if (normalized === 'breakfast') {
+    return {
+      title: 'Breakfast Package',
+      orderText: 'Order before 8:00 PM previous day',
+      readyText: getPackageReadyText('breakfast'),
+    }
+  }
+  if (normalized === 'dinner') {
+    return {
+      title: 'Dinner Package',
+      orderText: 'Order before 12:00 PM same day',
+      readyText: getPackageReadyText('dinner'),
+    }
+  }
+  if (normalized === 'lunch') {
+    return {
+      title: 'Special Lunch',
+      orderText: 'Order before 8:00 AM same day',
+      readyText: getPackageReadyText('lunch'),
+    }
+  }
+  return {
+    title: 'Meal Package',
+    orderText: 'Order window will be announced soon',
+    readyText: getPackageReadyText(normalized),
+  }
+}
 
 function sanitizePackageQuantityInput(value, previousValue = '') {
   const digits = String(value || '').replace(/\D/g, '')
@@ -159,7 +299,7 @@ function isMenuItemOrderOpen(date = new Date()) {
 
 function getPackageCancelCutoff(orderDate, mealTypeName) {
   if (!orderDate) return null
-  const normalized = String(mealTypeName || '').trim().toLowerCase()
+  const normalized = normalizeMealSlotName(mealTypeName)
   const cutoff = new Date(`${orderDate}T00:00:00`)
   if (Number.isNaN(cutoff.getTime())) return null
 
@@ -205,22 +345,30 @@ function getPackageCancelInfo(packageOrder, isCombined = false) {
   }
 }
 
-function OrderMethodModal({ onSelect, onCancel }) {
+function OrderMethodModal({
+  onSelect,
+  onCancel,
+  title = 'Choose Order Method',
+  subtitle = 'Select how you would like to receive this order.',
+  options = null,
+}) {
   useBodyScrollLock()
+
+  const orderOptions = options || [
+    { value: 'takeaway', label: 'Takeaway', sub: 'Pick up in about 30 minutes', icon: Package2 },
+    { value: 'delivery', label: 'Delivery', sub: 'Deliver to your address', icon: Truck },
+  ]
 
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
       <div className="sd-modal" onClick={(e) => e.stopPropagation()}>
         <div className="sd-modal-header">
-          <h3 className="sd-modal-title">Choose Order Method</h3>
-          <p className="sd-modal-sub">Select how you would like to receive this order.</p>
+          <h3 className="sd-modal-title">{title}</h3>
+          <p className="sd-modal-sub">{subtitle}</p>
         </div>
 
         <div className="sd-ot-grid">
-          {[
-            { value: 'takeaway', label: 'Takeaway', sub: 'Pick up in about 30 minutes', icon: Package2 },
-            { value: 'delivery', label: 'Delivery', sub: 'Deliver to your address', icon: Truck },
-          ].map(({ value, label, sub, icon }) => {
+          {orderOptions.map(({ value, label, sub, icon }) => {
             const MethodIcon = icon
             return (
               <button
@@ -891,7 +1039,7 @@ function TakeawayModal({
 function getCutoffDate(mealTypeName, orderDate) {
   if (!mealTypeName || !orderDate) return null
   const date = new Date(orderDate)
-  const name = mealTypeName.toLowerCase()
+  const name = normalizeMealSlotName(mealTypeName)
 
   if (name === 'breakfast') {
     const d = new Date(date)
@@ -903,6 +1051,12 @@ function getCutoffDate(mealTypeName, orderDate) {
   if (name === 'dinner') {
     const d = new Date(date)
     d.setHours(12, 0, 0, 0)
+    return d
+  }
+
+  if (name === 'lunch') {
+    const d = new Date(date)
+    d.setHours(8, 0, 0, 0)
     return d
   }
 
@@ -1133,8 +1287,26 @@ function TodayMealModal({ plan, onClose }) {
 }
 
 // ── Add Menu Items prompt ─────────────────────────────────────────────────────
-function AddMenuItemsPrompt({ onAddItems, onPlaceOnly, onCancel }) {
+function AddMenuItemsPrompt({
+  onAddItems,
+  onPlaceOnly,
+  onCancel,
+  deliveryType = 'takeaway',
+  canAddItems = true,
+  addItemsHint = MENU_ITEM_ORDER_HOURS_MESSAGE,
+}) {
   useBodyScrollLock()
+  const isDelivery = String(deliveryType || '').toLowerCase() === 'delivery'
+  const promptTitle = isDelivery ? 'Delivery Details Ready' : 'Pickup Details Ready'
+  const promptText = isDelivery
+    ? 'Your meal package delivery details are saved for this checkout.'
+    : 'Your meal package pickup details are saved for this checkout.'
+  const primaryNote = isDelivery
+    ? 'Place Package Only keeps this meal package as a delivery order.'
+    : 'Place Package Only keeps this meal package as a takeaway order.'
+  const secondaryNote = isDelivery
+    ? 'If you add cafe items, the delivery fee will be calculated for the combined order at checkout.'
+    : 'If you add cafe items, they will be added to the same takeaway order.'
 
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
@@ -1143,18 +1315,33 @@ function AddMenuItemsPrompt({ onAddItems, onPlaceOnly, onCancel }) {
           <Package2 size={30} strokeWidth={2.2} />
         </div>
 
-        <h3 className="sd-package-prompt-title">Package Details Ready</h3>
-        <p className="sd-package-prompt-text">
-          Your meal package details are saved for this checkout. Add cafe items to the same order, or place the package only now.
-        </p>
+        <h3 className="sd-package-prompt-title">{promptTitle}</h3>
+        <p className="sd-package-prompt-text">{promptText}</p>
 
         <div className="sd-package-prompt-note">
           <CheckCircle2 size={15} strokeWidth={2.3} />
-          <span>No extra delivery fee is added for this meal package checkout.</span>
+          <span>{primaryNote}</span>
         </div>
 
+        <div className="sd-package-prompt-note warning">
+          <Package2 size={15} strokeWidth={2.3} />
+          <span>{secondaryNote}</span>
+        </div>
+
+        {!canAddItems && (
+          <div className="sd-package-prompt-note warning">
+            <Clock3 size={15} strokeWidth={2.3} />
+            <span>{addItemsHint}</span>
+          </div>
+        )}
+
         <div className="sd-package-prompt-actions">
-          <button type="button" className="sd-btn-primary sd-package-prompt-primary" onClick={onAddItems}>
+          <button
+            type="button"
+            className="sd-btn-primary sd-package-prompt-primary"
+            onClick={onAddItems}
+            disabled={!canAddItems}
+          >
             <ShoppingCart size={16} strokeWidth={2.3} />
             Add Cafe Items
           </button>
@@ -1167,6 +1354,377 @@ function AddMenuItemsPrompt({ onAddItems, onPlaceOnly, onCancel }) {
           </button>
         </div>
       </div>
+    </div>,
+    document.body
+  )
+}
+
+function PackageSuggestionModal({ suggestedLabel, mealTitle = 'selected', onAddOther, onContinue, onClose }) {
+  useBodyScrollLock()
+
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onClose}>
+      <div className="sd-modal sd-package-upsell-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-modal-header">
+          <h3 className="sd-modal-title">Add Another Option?</h3>
+          <p className="sd-modal-sub">
+            You can continue now, or add a {suggestedLabel.toLowerCase()} {mealTitle.toLowerCase()} package before checkout.
+          </p>
+        </div>
+
+        <div className="sd-package-upsell-note">
+          <CheckCircle2 size={16} strokeWidth={2.3} />
+          <span>You can mix veg and non-veg only within the same selected meal slot and date.</span>
+        </div>
+
+        <div className="sd-package-upsell-actions">
+          <button type="button" className="sd-btn-primary" onClick={onAddOther}>
+            Add {suggestedLabel} {mealTitle}
+          </button>
+          <button type="button" className="sd-btn-secondary" onClick={onContinue}>
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function PackageCategoryDetailsModal({
+  category,
+  selectedDate,
+  dateOptions,
+  maxDate,
+  cartEntries,
+  cartCount,
+  cartTotal,
+  cartError = '',
+  onClose,
+  onDateChange,
+  onAddPackage,
+  onDecreasePackage,
+  onRemovePackage,
+  onClearCart,
+  onContinue,
+  selectionHint = '',
+  lockedDateValue = '',
+  focusMealTime = '',
+}) {
+  useBodyScrollLock()
+  const modalRef = useRef(null)
+  const cartSectionRef = useRef(null)
+  const packageRefs = useRef({})
+  const [showMobileReviewBar, setShowMobileReviewBar] = useState(false)
+  const CategoryIcon = category?.icon || UtensilsCrossed
+
+  const handleReviewCart = (e) => {
+    e?.stopPropagation?.()
+    const modalEl = modalRef.current
+    const cartEl = cartSectionRef.current
+    if (!modalEl || !cartEl) return
+
+    const modalRect = modalEl.getBoundingClientRect()
+    const cartRect = cartEl.getBoundingClientRect()
+    const nextTop = modalEl.scrollTop + (cartRect.top - modalRect.top) - 12
+    modalEl.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
+  }
+
+  useEffect(() => {
+    const modalEl = modalRef.current
+    const cartEl = cartSectionRef.current
+    if (!modalEl || !cartEl || cartCount <= 0) {
+      setShowMobileReviewBar(false)
+      return
+    }
+
+    const updateReviewBarVisibility = () => {
+      const modalRect = modalEl.getBoundingClientRect()
+      const cartRect = cartEl.getBoundingClientRect()
+      const isVisibleInModal = cartRect.top < (modalRect.bottom - 96) && cartRect.bottom > (modalRect.top + 24)
+      setShowMobileReviewBar(!isVisibleInModal)
+    }
+
+    updateReviewBarVisibility()
+    modalEl.addEventListener('scroll', updateReviewBarVisibility, { passive: true })
+    window.addEventListener('resize', updateReviewBarVisibility)
+
+    return () => {
+      modalEl.removeEventListener('scroll', updateReviewBarVisibility)
+      window.removeEventListener('resize', updateReviewBarVisibility)
+    }
+  }, [cartCount, category?.key, selectedDate])
+
+  useEffect(() => {
+    if (!focusMealTime) return
+    const modalEl = modalRef.current
+    const normalizedMealTime = normalizeMealSlotName(focusMealTime)
+    const target = packageRefs.current[normalizedMealTime]
+    if (!modalEl || !target) return
+
+    requestAnimationFrame(() => {
+      const modalRect = modalEl.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const nextTop = modalEl.scrollTop + (targetRect.top - modalRect.top) - 12
+      modalEl.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' })
+    })
+  }, [category?.key, focusMealTime, selectedDate])
+
+  if (!category) return null
+
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onClose}>
+      <div
+        ref={modalRef}
+        className={`sd-modal sd-package-category-modal${cartCount > 0 && showMobileReviewBar ? ' has-mobile-review-bar' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="sd-modal-close-btn sd-package-category-close-btn"
+          onClick={onClose}
+          aria-label="Close package details"
+        >
+          <X size={16} strokeWidth={2.4} />
+        </button>
+
+        <div className="sd-package-category-hero">
+          <img src={category.image} alt={category.title} className="sd-package-category-hero-img" />
+          <span className={`sd-package-category-badge ${category.key === 'veg' ? 'veg' : 'nonveg'}`}>
+            <CategoryIcon size={15} strokeWidth={2.2} />
+            {category.badge}
+          </span>
+        </div>
+
+        <div className="sd-package-category-body">
+          <div className="sd-package-category-datebar">
+            <div>
+              <p className="sd-package-category-datebar-kicker">Choose meal day</p>
+              <p className="sd-package-category-datebar-text">Switch the day here to view package details without leaving this window.</p>
+            </div>
+            <div className="sd-date-strip compact" aria-label="Choose package date">
+              {dateOptions.map((option) => {
+                const isLockedOut = Boolean(lockedDateValue) && option.value !== lockedDateValue
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`sd-date-chip${selectedDate === option.value ? ' active' : ''}${isLockedOut ? ' disabled' : ''}`}
+                    onClick={() => onDateChange(option.value)}
+                    disabled={isLockedOut}
+                    title={isLockedOut ? 'Clear the selected package to switch to another date.' : ''}
+                  >
+                    <span>{option.label}</span>
+                    <small>{option.sub}</small>
+                  </button>
+                )
+              })}
+              <input
+                className="sd-date-picker"
+                type="date"
+                min={dateOptions[0]?.value}
+                max={maxDate}
+                value={selectedDate}
+                disabled={Boolean(lockedDateValue)}
+                onChange={(e) => onDateChange(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="sd-modal-header">
+            <h3 className="sd-modal-title">{category.title}</h3>
+            <p className="sd-modal-sub">{category.dateLabel} package details</p>
+          </div>
+
+          <div className="sd-package-category-layout">
+            <div>
+              {selectionHint && (
+                <div className="sd-package-category-cart-note" style={{ marginBottom: '16px' }}>
+                  <CheckCircle2 size={16} strokeWidth={2.3} />
+                  <span>{selectionHint}</span>
+                </div>
+              )}
+
+              {category.packages.length === 0 ? (
+                <div className="sd-package-category-empty">
+                  <UtensilsCrossed size={18} strokeWidth={2.2} />
+                  <span>No packages are configured for this category on the selected date.</span>
+                </div>
+              ) : (
+                <div className="sd-package-category-list">
+                  {category.packages.map((pkg) => {
+                    const PackageIcon = pkg.icon || UtensilsCrossed
+                    const quantity = pkg.cartQuantity || 0
+                    return (
+                      <article
+                        key={pkg.key}
+                        ref={(node) => {
+                          packageRefs.current[normalizeMealSlotName(pkg.mealTime)] = node
+                        }}
+                        className="sd-package-category-card"
+                        style={{
+                          borderColor: pkg.border,
+                          background: pkg.background,
+                        }}
+                      >
+                        <div className="sd-package-category-card-head">
+                          <div className="sd-package-category-card-title">
+                            <span className="sd-package-category-card-icon" style={{ color: pkg.color }}>
+                              <PackageIcon size={16} strokeWidth={2.2} />
+                            </span>
+                            <div>
+                              <strong>{pkg.title}</strong>
+                              <small>{pkg.priceLabel}</small>
+                            </div>
+                          </div>
+                          {!pkg.canOrder && (
+                            <span className="sd-package-category-status viewonly">View Only</span>
+                          )}
+                          {pkg.closed && (
+                            <span className="sd-package-category-status closed">Closed</span>
+                          )}
+                        </div>
+
+                        <div className="sd-package-category-card-meta">
+                          <span>
+                            <Clock3 size={14} strokeWidth={2.2} />
+                            {pkg.orderText}
+                          </span>
+                          <span>
+                            <Package2 size={14} strokeWidth={2.2} />
+                            {pkg.readyText}
+                          </span>
+                        </div>
+
+                        {pkg.dishes.length === 0 ? (
+                          <p className="sd-package-category-card-empty">Dishes will be updated soon.</p>
+                        ) : (
+                          <>
+                            <div className="sd-package-category-card-dishes-head">
+                              <UtensilsCrossed size={14} strokeWidth={2.1} />
+                              <span>What&apos;s inside this package</span>
+                            </div>
+                            <div className="sd-package-category-card-dishes">
+                              {pkg.dishes.map((dish) => (
+                                <span key={`${pkg.key}_${dish}`}>{dish}</span>
+                              ))}
+                            </div>
+                          </>
+                        )}
+
+                        <div className="sd-package-category-card-actions">
+                          {pkg.canOrder && !pkg.closed && !pkg.selectionBlocked ? (
+                            quantity > 0 ? (
+                              <div className="sd-package-inline-qty">
+                                <button type="button" className="sd-package-inline-qty-btn" onClick={() => onDecreasePackage(pkg)}>
+                                  <Minus size={14} strokeWidth={2.4} />
+                                </button>
+                                <span className="sd-package-inline-qty-value">{quantity}</span>
+                                <button type="button" className="sd-package-inline-qty-btn" onClick={() => onAddPackage(pkg)}>
+                                  <Plus size={14} strokeWidth={2.4} />
+                                </button>
+                              </div>
+                            ) : (
+                              <button type="button" className="sd-package-add-cart-btn" onClick={() => onAddPackage(pkg)}>
+                                <ShoppingCart size={15} strokeWidth={2.2} />
+                                Add to Cart
+                              </button>
+                            )
+                          ) : (
+                            <div className="sd-package-category-card-note">
+                              {pkg.closed
+                                ? 'Ordering closed for this package.'
+                                : pkg.selectionBlocked
+                                  ? pkg.selectionBlockedReason
+                                  : 'This package is available to view only.'}
+                            </div>
+                          )}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <aside ref={cartSectionRef} className="sd-package-category-cart">
+              <div className="sd-package-category-cart-head">
+                <div>
+                  <h4>Your Cart</h4>
+                  <p>{cartCount === 0 ? 'Add packages to continue.' : `${cartCount} package${cartCount === 1 ? '' : 's'} selected`}</p>
+                </div>
+                {cartCount > 0 && <span className="sd-package-category-cart-count">{cartCount}</span>}
+              </div>
+
+              {cartEntries.length === 0 ? (
+                <div className="sd-package-category-cart-empty">
+                  <ShoppingCart size={18} strokeWidth={2.2} />
+                  <span>No meal packages in your cart yet.</span>
+                </div>
+              ) : (
+                <div className="sd-package-category-cart-list">
+                  {cartEntries.map((entry) => (
+                    <div key={entry.key} className="sd-package-category-cart-row">
+                      <div>
+                        <strong>{entry.label}</strong>
+                        <span>{entry.dateLabel}</span>
+                        <span>{entry.priceLabel} each</span>
+                      </div>
+                      <div className="sd-package-category-cart-controls">
+                        <button type="button" className="sd-package-inline-qty-btn" onClick={() => onDecreasePackage(entry)}>
+                          <Minus size={14} strokeWidth={2.4} />
+                        </button>
+                        <span className="sd-package-inline-qty-value">{entry.quantity}</span>
+                        <button type="button" className="sd-package-inline-qty-btn" onClick={() => onAddPackage(entry)}>
+                          <Plus size={14} strokeWidth={2.4} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="sd-package-category-cart-note">
+                <CheckCircle2 size={16} strokeWidth={2.3} />
+                <span>Meal packages include free delivery during package checkout.</span>
+              </div>
+
+              {cartError && <div className="sd-alert error">{cartError}</div>}
+
+              <div className="sd-package-category-cart-total">
+                <span>Total</span>
+                <strong>LKR {cartTotal.toFixed(2)}</strong>
+              </div>
+
+              <div className="sd-package-category-actions cart">
+                <button type="button" className="sd-btn-secondary" disabled={cartEntries.length === 0} onClick={onClearCart}>
+                  Clear Cart
+                </button>
+                <button type="button" className="sd-btn-primary" disabled={cartEntries.length === 0} onClick={onContinue}>
+                  Continue
+                </button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      {cartCount > 0 && showMobileReviewBar && (
+        <button
+          type="button"
+          className="sd-package-mobile-cart-bar"
+          onClick={handleReviewCart}
+        >
+          <span className="sd-package-mobile-cart-bar-main">
+            <span className="sd-package-mobile-cart-bar-title">
+              <ShoppingCart size={15} strokeWidth={2.2} />
+              {cartCount} package{cartCount === 1 ? '' : 's'}
+            </span>
+            <span className="sd-package-mobile-cart-bar-total">Rs. {cartTotal.toFixed(2)}</span>
+          </span>
+          <span className="sd-package-mobile-cart-bar-cta">Review Cart</span>
+        </button>
+      )}
     </div>,
     document.body
   )
@@ -1201,9 +1759,68 @@ function getPackageSummaryLine(payload, mealTypes = []) {
   }
 }
 
+function getWeeklyPlanDayKeyForDate(value) {
+  const date = new Date(`${value}T00:00:00`)
+  const dayIndex = Number.isNaN(date.getTime()) ? new Date().getDay() : date.getDay()
+  return dayIndex === 0 ? 6 : dayIndex - 1
+}
+
+function getPendingPackagePriceValue(payload, mealTypes = [], weeklyPlan = {}) {
+  const mealType = mealTypes.find((type) => Number(type.id) === Number(payload?.meal_type))
+  const mealTime = normalizeMealSlotName(mealType?.name)
+  if (!mealTime) return 0
+
+  const orderDate = payload?.order_date || toInputDate(new Date())
+  const dayKey = getWeeklyPlanDayKeyForDate(orderDate)
+  const mealCategory = payload?.preference === 'non-veg' ? 'nonveg' : 'veg'
+  const slotDayKey = mealTime === 'lunch' && (dayKey === 5 || dayKey === 6) ? 5 : dayKey
+  const slot = weeklyPlan?.[`${slotDayKey}_${mealTime}_${mealCategory}`]
+  const price = Number(slot?.price || 0)
+  return Number.isFinite(price) ? price : 0
+}
+
+function getPendingPackageEntries(payload, mealTypes = [], weeklyPlan = {}) {
+  return normalizePackagePayloads(payload).map((item, index) => {
+    const summary = getPackageSummaryLine(item, mealTypes)
+    const priceValue = getPendingPackagePriceValue(item, mealTypes, weeklyPlan)
+    return {
+      ...summary,
+      key: `${item?.meal_type || 'pkg'}_${item?.preference || 'pref'}_${item?.order_date || 'date'}_${index}`,
+      priceValue,
+      subtotalLabel: priceValue > 0 ? `Rs. ${(priceValue * summary.qty).toFixed(2)}` : '',
+      unitPriceLabel: priceValue > 0 ? `Rs. ${priceValue.toFixed(2)} each` : '',
+      payload: item,
+    }
+  })
+}
+
 function getPackageReadyTextFromPayload(payload, mealTypes = []) {
   const mealType = mealTypes.find((type) => Number(type.id) === Number(payload?.meal_type))
   return getPackageReadyText(mealType?.name)
+}
+
+function normalizePackagePayloads(payload) {
+  if (!payload) return []
+  return Array.isArray(payload) ? payload.filter(Boolean) : [payload]
+}
+
+function getPackageSummaryLines(payload, mealTypes = []) {
+  return normalizePackagePayloads(payload).map((item) => getPackageSummaryLine(item, mealTypes))
+}
+
+function getPackageReadyTextFromPayloads(payload, mealTypes = []) {
+  const names = normalizePackagePayloads(payload)
+    .map((item) => {
+      const mealType = mealTypes.find((type) => Number(type.id) === Number(item?.meal_type))
+      return mealType?.name
+    })
+    .filter(Boolean)
+
+  const uniqueNames = [...new Set(names.map((name) => name.toLowerCase()))]
+  if (uniqueNames.length > 1) {
+    return 'Breakfast is ready at 7:30 AM. Lunch is ready at 12:30 PM. Dinner is ready at 7:00 PM.'
+  }
+  return getPackageReadyTextFromPayload(normalizePackagePayloads(payload)[0], mealTypes)
 }
 
 function OrderSuccessModal({ order, onClose, onViewHistory }) {
@@ -1292,8 +1909,118 @@ function OrderSuccessModal({ order, onClose, onViewHistory }) {
   )
 }
 
+function CombinedOrderReviewModal({ review, submitting = false, onConfirm, onCancel }) {
+  useBodyScrollLock()
+
+  if (!review) return null
+
+  const isDelivery = review.method === 'delivery'
+
+  return createPortal(
+    <div className="sd-modal-overlay" onClick={onCancel}>
+      <div className="sd-modal sd-order-review-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="sd-order-review-hero">
+          <div className="sd-order-review-icon">
+            <Package2 size={32} strokeWidth={2.2} />
+          </div>
+          <p className="sd-order-review-kicker">Final Review</p>
+          <h3 className="sd-order-review-title">{review.title}</h3>
+          <p className="sd-order-review-text">{review.message}</p>
+        </div>
+
+        <div className="sd-order-review-body">
+          <div className="sd-order-review-section">
+            <div className="sd-order-review-section-title">
+              <Package2 size={16} strokeWidth={2.2} />
+              Meal Packages
+            </div>
+            <div className="sd-order-review-lines">
+              {review.packageLines.map((line, index) => (
+                <div key={`${line.name}-${index}`} className="sd-order-review-line">
+                  <div>
+                    <strong>{line.name}</strong>
+                    {line.date && <span>{formatOrderSuccessDate(line.date)}</span>}
+                    {line.subtotalLabel && <span>{line.subtotalLabel}</span>}
+                  </div>
+                  <em>x{line.qty}</em>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="sd-order-review-section">
+            <div className="sd-order-review-section-title">
+              <ShoppingCart size={16} strokeWidth={2.2} />
+              Cafe Items
+            </div>
+            {review.itemLines.length === 0 ? (
+              <div className="sd-order-review-empty">No cafe items added to this order.</div>
+            ) : (
+              <div className="sd-order-review-lines">
+                {review.itemLines.map((line, index) => (
+                  <div key={`${line.name}-${index}`} className="sd-order-review-line">
+                    <div>
+                      <strong>{line.name}</strong>
+                      {line.subtotal && <span>{line.subtotal}</span>}
+                    </div>
+                    <em>x{line.qty}</em>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="sd-order-review-details">
+            <div>
+              <span>Method</span>
+              <strong>{isDelivery ? 'Delivery' : 'Takeaway'}</strong>
+            </div>
+            <div>
+              <span>{isDelivery ? 'Delivery' : 'Pickup'}</span>
+              <strong>{isDelivery ? review.deliveryAddress || 'Delivery address saved' : review.pickupDetails || 'Pickup from Cafe Lush'}</strong>
+            </div>
+            {review.phoneNumber && (
+              <div>
+                <span>Phone</span>
+                <strong>{review.phoneNumber}</strong>
+              </div>
+            )}
+            {isDelivery && (
+              <div>
+                <span>Delivery Fee</span>
+                <strong>{review.deliveryFeeLabel || 'Calculated at checkout'}</strong>
+              </div>
+            )}
+          </div>
+
+          <div className="sd-order-review-note">
+            <CheckCircle2 size={16} strokeWidth={2.2} />
+            <span>
+              Press confirm to place this combined order with {review.packageLines.length} package type{review.packageLines.length === 1 ? '' : 's'} and {review.itemLines.length} cafe item{review.itemLines.length === 1 ? '' : 's'}.
+            </span>
+          </div>
+        </div>
+
+        <div className="sd-order-review-actions">
+          <button type="button" className="sd-btn-secondary" onClick={onCancel} disabled={submitting}>
+            Back
+          </button>
+          <button type="button" className="sd-btn-primary" onClick={onConfirm} disabled={submitting}>
+            {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
+            Confirm Order
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ── Panel 1 - Meal Packages ───────────────────────────────────────────────────
-function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, refetchWeeklyPlan }) {
+function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, refetchWeeklyPlan, onOpenMenu }) {
+  const { data: menuPreviewItems = [], loading: loadingMenuPreview } = useApi(getStudentItems)
+  const [selectedDate, setSelectedDate] = useState(() => toInputDate(new Date()))
+  const [selectedPackages, setSelectedPackages] = useState({})
   const [form, setForm] = useState({
     meal_type: '',
     preference: '',
@@ -1310,42 +2037,68 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   const [openingMealMenu, setOpeningMealMenu] = useState(false)
 
   const selectedType = mealTypes.find((t) => t.id === Number(form.meal_type))
-  const cutoffDate = getCutoffDate(selectedType?.name, form.order_date)
+  const firstSelectedPackage = Object.values(selectedPackages)[0]
+  const activeType = firstSelectedPackage
+    ? mealTypes.find((t) => Number(t.id) === Number(firstSelectedPackage.mealTypeId))
+    : selectedType
+  const cutoffDate = getCutoffDate(activeType?.name, selectedDate)
   const { timeLeft, isPast } = useCountdown(cutoffDate)
 
   const todayDate = new Date()
   const today = toInputDate(todayDate)
-  const tomorrow = toInputDate(addDays(todayDate, 1))
   const maxDate = toInputDate(addDays(todayDate, 3))
-  const isPastNoon = new Date().getHours() >= 12
-  const minDate = (selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon) ? tomorrow : today
-  const cardDate = form.order_date || today
+  const minDate = today
+  const cardDate = selectedDate || today
   const cardDateObj = new Date(`${cardDate}T00:00:00`)
   const cardDayJs = Number.isNaN(cardDateObj.getTime()) ? new Date().getDay() : cardDateObj.getDay()
   const cardDayKey = cardDayJs === 0 ? 6 : cardDayJs - 1
 
-  const canPickDate = form.meal_type && form.preference
+  const selectedDateObj = new Date(`${selectedDate}T00:00:00`)
+  const selectedDateLabel = Number.isNaN(selectedDateObj.getTime())
+    ? 'selected date'
+    : selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+  const selectedPackageEntries = Object.values(selectedPackages)
+  const selectedPackageCount = selectedPackageEntries.reduce((sum, item) => sum + item.quantity, 0)
+  const selectedPackageTotal = selectedPackageEntries.reduce((sum, item) => sum + item.quantity * Number(item.price || 0), 0)
+  const previewItems = buildPopularPreviewItems(menuPreviewItems)
+  const dateOptions = Array.from({ length: 4 }, (_, index) => {
+    const date = addDays(todayDate, index)
+    const value = toInputDate(date)
+    const label = index === 0
+      ? 'Today'
+      : index === 1
+        ? 'Tomorrow'
+        : date.toLocaleDateString('en-US', { weekday: 'short' })
+    return {
+      value,
+      label,
+      sub: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    }
+  })
 
   useEffect(() => {
-    if (!canPickDate) return
+    setPackageCart({})
+    setCartError('')
+    setActiveCategory(null)
+    setShowSuggestion(false)
+    setShowOrderMethod(false)
+    setShowDelivery(false)
+    setShowTakeaway(false)
+    setShowPrompt(false)
+    setPendingPayload(null)
+  }, [selectedDate])
 
+  useEffect(() => {
     setForm((prev) => {
-      const needsDefault =
-        !prev.order_date ||
-        prev.order_date < minDate ||
-        prev.order_date > maxDate
-
-      if (!needsDefault) return prev
-
       return {
         ...prev,
-        order_date: minDate,
+        order_date: selectedDate,
       }
     })
-  }, [canPickDate, minDate, maxDate])
+  }, [selectedDate])
 
   const getPlanPrice = (mealTime, mealCategory) => {
-    const normalizedMeal = mealTime?.toLowerCase()
+    const normalizedMeal = normalizeMealSlotName(mealTime)
     if (!normalizedMeal) return null
     const dayKey = normalizedMeal === 'lunch' && (cardDayKey === 5 || cardDayKey === 6)
       ? 5
@@ -1357,7 +2110,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   }
 
   const getCardPriceLabel = (mealTypeName) => {
-    const mealTime = mealTypeName?.toLowerCase()
+    const mealTime = normalizeMealSlotName(mealTypeName)
     const vegPrice = getPlanPrice(mealTime, 'veg')
     const nonVegPrice = getPlanPrice(mealTime, 'nonveg')
 
@@ -1371,26 +2124,86 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
     return 'LKR price updating...'
   }
 
+  const getPackageOptionPrice = (mealTypeName, preference) => {
+    const mealTime = normalizeMealSlotName(mealTypeName)
+    const mealCategory = preference === 'non-veg' ? 'nonveg' : 'veg'
+    return getPlanPrice(mealTime, mealCategory) || '200.00'
+  }
+
+  const getPackageSlot = (mealTypeName, preference) => {
+    const normalizedMeal = normalizeMealSlotName(mealTypeName)
+    const mealCategory = preference === 'non-veg' ? 'nonveg' : 'veg'
+    const dayKey = normalizedMeal === 'lunch' && (cardDayKey === 5 || cardDayKey === 6)
+      ? 5
+      : cardDayKey
+    return weeklyPlan?.[`${dayKey}_${normalizedMeal}_${mealCategory}`]
+  }
+
+  const getPackageSelectionKey = (mealTypeId, preference) => `${mealTypeId}_${preference}`
+
+  const addPackageSelection = (mealType, preference) => {
+    const key = getPackageSelectionKey(mealType.id, preference)
+    const price = getPackageOptionPrice(mealType.name, preference)
+    setSelectedPackages((prev) => {
+      const current = prev[key]
+      const nextQuantity = Math.min(MAX_PACKAGE_QUANTITY, (current?.quantity || 0) + 1)
+      return {
+        ...prev,
+        [key]: {
+          key,
+          mealTypeId: mealType.id,
+          mealTypeName: mealType.name,
+          preference,
+          quantity: nextQuantity,
+          price,
+        },
+      }
+    })
+    setForm((prev) => ({
+      ...prev,
+      meal_type: String(mealType.id),
+      preference,
+      order_date: selectedDate,
+    }))
+    setError('')
+  }
+
+  const decreasePackageSelection = (entry) => {
+    setSelectedPackages((prev) => {
+      const next = { ...prev }
+      if (!next[entry.key]) return prev
+      if (next[entry.key].quantity <= 1) {
+        delete next[entry.key]
+        return next
+      }
+      next[entry.key] = { ...next[entry.key], quantity: next[entry.key].quantity - 1 }
+      return next
+    })
+  }
+
+  const clearSelectedPackages = () => {
+    setSelectedPackages({})
+    setError('')
+  }
+
+  const isPackageOptionClosed = (mealTypeName) => {
+    const cutoff = getCutoffDate(mealTypeName, selectedDate)
+    return Boolean(cutoff) && new Date() > cutoff
+  }
+
   const handleOrder = async (e) => {
     e.preventDefault()
-    if (!form.meal_type || !form.preference) {
-      setError('Please select a meal type and preference first.')
+    if (selectedPackageEntries.length === 0) {
+      setError('Please add at least one meal package first.')
       return
     }
-    if (isPast) {
-      setError(
-        selectedType?.name?.toLowerCase() === 'breakfast'
-          ? 'Cutoff passed. Breakfast must be ordered before 8:00 PM the previous day.'
-          : 'Cutoff passed. Dinner must be ordered before 12:00 PM on the same day.'
-      )
+    const closedPackage = selectedPackageEntries.find((entry) => isPackageOptionClosed(entry.mealTypeName))
+    if (closedPackage) {
+      setError(`${closedPackage.mealTypeName} ordering is closed for ${selectedDateLabel}.`)
       return
     }
-    if (form.order_date < minDate || form.order_date > maxDate) {
+    if (selectedDate < minDate || selectedDate > maxDate) {
       setError('Meal packages can only be ordered from today up to 3 days ahead.')
-      return
-    }
-    if (selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon && form.order_date === today) {
-      setError('It is past 12:00 PM - dinner can only be ordered for tomorrow or later.')
       return
     }
     if (form.delivery_type === 'delivery') {
@@ -1401,7 +2214,6 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   }
 
   const buildPayloadAndPrompt = ({
-    quantity,
     detailsText = '',
     phoneNumber = '',
     addressLine1 = '',
@@ -1411,11 +2223,11 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
     deliveryLatitude = null,
     deliveryLongitude = null,
   }) => {
-    const payload = {
-      meal_type: Number(form.meal_type),
-      order_date: form.order_date,
+    const payloads = selectedPackageEntries.map((entry) => ({
+      meal_type: Number(entry.mealTypeId),
+      order_date: selectedDate,
       delivery_type: form.delivery_type,
-      quantity,
+      quantity: entry.quantity,
       delivery_address: detailsText,
       address_line_1: addressLine1,
       address_line_2: addressLine2,
@@ -1425,23 +2237,27 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
       delivery_longitude: deliveryLongitude,
       phone_number: phoneNumber,
       order_type: 'package',
-      preference: form.preference,
-    }
+      preference: entry.preference,
+    }))
+    const payload = payloads.length === 1 ? payloads[0] : payloads
     setPendingPayload(payload)
     setShowPrompt(true)
   }
 
-  const handlePromptPlaceOnly = () => {
+  const handlePromptPlaceOnly = async () => {
     setShowPrompt(false)
-    onPackageReady(pendingPayload, false)
+    await onPackageReady(pendingPayload, false)
     setForm({ meal_type: '', preference: '', order_date: '', delivery_type: 'takeaway', quantity: 1 })
+    setSelectedPackages({})
     setPendingPayload(null)
   }
 
-  const handlePromptAddItems = () => {
+  const handlePromptAddItems = async () => {
+    const didQueueMenuItems = await onPackageReady(pendingPayload, true)
+    if (!didQueueMenuItems) return
     setShowPrompt(false)
-    onPackageReady(pendingPayload, true)
     setForm({ meal_type: '', preference: '', order_date: '', delivery_type: 'takeaway', quantity: 1 })
+    setSelectedPackages({})
     setPendingPayload(null)
   }
 
@@ -1495,64 +2311,123 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
       >
         <div>
           <h2 className="sd-panel-title">Meal Packages</h2>
-          <p className="sd-panel-subtitle">Select a package and schedule your meal</p>
+          <p className="sd-panel-subtitle">Choose a date, add today&apos;s packages, and checkout once.</p>
         </div>
-        <button type="button" className="sd-btn-see-meal" onClick={handleOpenMealMenu} disabled={openingMealMenu} aria-label="Choose meal">
+        <button type="button" className="sd-btn-see-meal" onClick={handleOpenMealMenu} disabled={openingMealMenu} aria-label="View weekly meals">
           <UtensilsCrossed size={16} strokeWidth={2.2} />
-          <span>{openingMealMenu ? 'Refreshing...' : 'Choose Meal'}</span>
+          <span>{openingMealMenu ? 'Refreshing...' : 'Weekly Meals'}</span>
         </button>
+      </div>
+
+      <div className="sd-home-hero">
+        <div>
+          <p className="sd-home-kicker">Meals for {selectedDateLabel}</p>
+          <h3 className="sd-home-title">Fresh packages ready to order</h3>
+          <p className="sd-home-copy">Add breakfast, dinner, veg, or non-veg together. Pickup or delivery details come at checkout.</p>
+        </div>
+        <div className="sd-date-strip" aria-label="Choose menu date">
+          {dateOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`sd-date-chip${selectedDate === option.value ? ' active' : ''}`}
+              onClick={() => {
+                setSelectedDate(option.value)
+                setError('')
+              }}
+            >
+              <span>{option.label}</span>
+              <small>{option.sub}</small>
+            </button>
+          ))}
+          <input
+            className="sd-date-picker"
+            type="date"
+            min={today}
+            max={maxDate}
+            value={selectedDate}
+            onChange={(e) => {
+              setSelectedDate(e.target.value)
+              setError('')
+            }}
+          />
+        </div>
       </div>
 
       {!loadingTypes && (
         <div className="sd-pkg-grid">
           {mealTypes.map((t) => {
-            const isBreakfast = t.name.toLowerCase() === 'breakfast'
+            const mealKey = t.name.toLowerCase()
+            const isBreakfast = mealKey === 'breakfast'
+            const media = MEAL_CARD_IMAGES[mealKey] || MEAL_CARD_IMAGES.breakfast
             const priceLabel = getCardPriceLabel(t.name)
+            const defaultPreference = media.defaultPreference || 'veg'
+            const defaultSlot = getPackageSlot(t.name, defaultPreference)
+            const defaultDishes = Array.isArray(defaultSlot?.dishes) ? defaultSlot.dishes.slice(0, 4) : []
+            const optionClosed = isPackageOptionClosed(t.name)
             return (
-              <div key={t.id} className="sd-pkg-card">
-                <div className="sd-pkg-card-top">
-                  <div>
-                    <p className="sd-pkg-name">{t.name}</p>
-                    <p className="sd-pkg-rule">
-                      {isBreakfast ? 'Order before 8:00 PM previous day' : 'Order before 12:00 PM same day'}
-                    </p>
-                  </div>
-                  <div
-                    className="sd-pkg-card-img-placeholder"
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  >
-                    {isBreakfast ? (
-                      <Sun size={22} strokeWidth={2.2} color={T.caramel} />
-                    ) : (
-                      <MoonStar size={22} strokeWidth={2.2} color={T.caramel} />
-                    )}
-                  </div>
+              <div key={t.id} className="sd-pkg-card sd-pkg-card-visual">
+                <div className="sd-pkg-image-wrap">
+                  <img src={media.image} alt={`${media.label} ${t.name}`} className="sd-pkg-hero-img" />
+                  <span className="sd-pkg-image-badge">
+                    {isBreakfast ? <Sun size={14} strokeWidth={2.2} /> : <MoonStar size={14} strokeWidth={2.2} />}
+                    {media.label}
+                  </span>
+                  {optionClosed && <span className="sd-pkg-closed-badge">Closed</span>}
                 </div>
 
-                <div className="sd-pkg-tags">
-                  <span className="sd-pkg-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <Package2 size={14} strokeWidth={2.2} />
-                    {getPackageReadyText(t.name)}
-                  </span>
-                  <span className="sd-pkg-tag delivery" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <Truck size={14} strokeWidth={2.2} />
-                    Delivery available
-                  </span>
-                  <span className="sd-pkg-tag veg" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <Vegan size={14} strokeWidth={2.2} />
-                    Veg
-                  </span>
-                  <span className="sd-pkg-tag nonveg" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                    <ChefHat size={14} strokeWidth={2.2} />
-                    Non-Veg
-                  </span>
-                </div>
+                <div className="sd-pkg-content">
+                  <div className="sd-pkg-card-top">
+                    <div>
+                      <p className="sd-pkg-name">{t.name} Package</p>
+                      <p className="sd-pkg-rule">
+                        {isBreakfast ? 'Order before 8:00 PM previous day' : 'Order before 12:00 PM same day'}
+                      </p>
+                    </div>
+                    <span className="sd-pkg-footer-price">{priceLabel}</span>
+                  </div>
 
-                <div className="sd-pkg-card-footer">
-                  <span className="sd-pkg-footer-name">{t.name} Package</span>
-                  <span className="sd-pkg-footer-price">
-                    {priceLabel}
-                  </span>
+                  <div className="sd-pkg-tags">
+                    <span className="sd-pkg-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <Package2 size={14} strokeWidth={2.2} />
+                      {getPackageReadyText(t.name)}
+                    </span>
+                    <span className="sd-pkg-tag delivery" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <Truck size={14} strokeWidth={2.2} />
+                      Delivery available
+                    </span>
+                  </div>
+
+                  {defaultDishes.length > 0 && (
+                    <div className="sd-pkg-dishes">
+                      {defaultDishes.map((dish) => (
+                        <span key={dish}>{dish}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="sd-pkg-actions">
+                    {[
+                      { preference: 'veg', label: 'Add Veg', icon: Vegan },
+                      { preference: 'non-veg', label: 'Add Non-Veg', icon: ChefHat },
+                    ].map(({ preference, label, icon }) => {
+                      const Icon = icon
+                      const key = getPackageSelectionKey(t.id, preference)
+                      const qty = selectedPackages[key]?.quantity || 0
+                      return (
+                        <button
+                          key={preference}
+                          type="button"
+                          className={`sd-pkg-add-btn ${preference === 'veg' ? 'veg' : 'nonveg'}${qty > 0 ? ' active' : ''}`}
+                          disabled={optionClosed}
+                          onClick={() => addPackageSelection(t, preference)}
+                        >
+                          <Icon size={14} strokeWidth={2.2} />
+                          <span>{qty > 0 ? `${label} (${qty})` : label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
             )
@@ -1563,69 +2438,53 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
       {error && <div className="sd-alert error">{error}</div>}
 
       <form onSubmit={handleOrder}>
-        <div className="sd-form-grid">
-          <div>
-            <label className="sd-field-label">Meal Package</label>
-            <select
-              className="sd-select"
-              value={form.meal_type}
-              required
-              onChange={(e) => {
-                setForm({ ...form, meal_type: e.target.value })
-                setError('')
-              }}
-            >
-              <option value="">Select meal type...</option>
-              {mealTypes.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+        <div className="sd-package-summary">
+          <div className="sd-package-summary-head">
+            <div>
+              <label className="sd-field-label">Your order for {selectedDateLabel}</label>
+              <p className="sd-package-method-subtitle">
+                {selectedPackageEntries.length === 0
+                  ? 'Choose one meal slot for one date, then add veg or non-veg for that selected slot.'
+                  : `${selectedPackageCount} package${selectedPackageCount === 1 ? '' : 's'} selected.`}
+              </p>
+            </div>
+            {selectedPackageEntries.length > 0 && (
+              <button type="button" className="sd-summary-clear" onClick={clearSelectedPackages}>
+                Clear
+              </button>
+            )}
+          </div>
+
+          {selectedPackageEntries.length === 0 ? (
+            <div className="sd-package-summary-empty">
+              <ShoppingCart size={18} strokeWidth={2.2} />
+              <span>No meal packages selected yet.</span>
+            </div>
+          ) : (
+            <div className="sd-package-summary-list">
+              {selectedPackageEntries.map((entry) => (
+                <div key={entry.key} className="sd-package-summary-row">
+                  <div>
+                    <strong>{entry.preference === 'non-veg' ? 'Non-Veg' : 'Veg'} {entry.mealTypeName}</strong>
+                    <span>LKR {Number(entry.price || 0).toFixed(2)} each</span>
+                  </div>
+                  <div className="sd-cart-qty-controls">
+                    <button type="button" className="sd-cart-qty-btn" onClick={() => decreasePackageSelection(entry)}>
+                      <Minus size={14} strokeWidth={2.4} />
+                    </button>
+                    <span className="sd-cart-qty-num">{entry.quantity}</span>
+                    <button type="button" className="sd-cart-qty-btn" onClick={() => addPackageSelection({ id: entry.mealTypeId, name: entry.mealTypeName }, entry.preference)}>
+                      <Plus size={14} strokeWidth={2.4} />
+                    </button>
+                  </div>
+                </div>
               ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="sd-field-label">Preference</label>
-            <select
-              className="sd-select"
-              value={form.preference}
-              required
-              onChange={(e) => {
-                setForm({ ...form, preference: e.target.value })
-                setError('')
-              }}
-            >
-              <option value="">Select preference...</option>
-              <option value="veg">Veg</option>
-              <option value="non-veg">Non-Veg</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="sd-field-label">Order Date</label>
-            <input
-              className="sd-input"
-              type="date"
-              min={minDate}
-              max={maxDate}
-              value={form.order_date}
-              required
-              disabled={!canPickDate}
-              title={!canPickDate ? 'Select meal type and preference first' : ''}
-              style={!canPickDate ? { opacity: 0.45, cursor: 'not-allowed' } : {}}
-              onChange={(e) => {
-                setForm({ ...form, order_date: e.target.value })
-                setError('')
-              }}
-            />
-            {!canPickDate && (
-              <p className="sd-input-hint">Select meal type &amp; preference first</p>
-            )}
-            {canPickDate && (
-              <p className="sd-input-hint">Meal packages can be scheduled up to 3 days ahead.</p>
-            )}
-            {canPickDate && selectedType?.name?.toLowerCase() === 'dinner' && isPastNoon && (
-              <p className="sd-input-hint warning">Past 12:00 PM - earliest dinner order is tomorrow.</p>
-            )}
-          </div>
+              <div className="sd-package-summary-total">
+                <span>Total</span>
+                <strong>LKR {selectedPackageTotal.toFixed(2)}</strong>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="sd-package-method-header">
@@ -1675,7 +2534,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
             : `${selectedReadyText}. Pickup is from Cafe Lush.`}
         </div>
 
-        <button type="submit" className="sd-btn-primary" disabled={isPast}>
+        <button type="submit" className="sd-btn-primary" disabled={selectedPackageEntries.length === 0}>
           {submitLabel}
         </button>
       </form>
@@ -1694,22 +2553,22 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
               ? <X size={18} strokeWidth={2.5} style={{ flexShrink: 0 }} />
               : <Clock3 size={18} strokeWidth={2.5} style={{ flexShrink: 0 }} />}
             <div style={{ flex: 1 }}>
-              {selectedType?.name?.toLowerCase() === 'breakfast' ? (
+              {activeType?.name?.toLowerCase() === 'breakfast' ? (
                 isPast ? (
                   <>
                     <span style={{ fontWeight: 800, fontSize: '13px' }}>Order window closed</span>
                     <span style={{ fontSize: '12px', display: 'block', marginTop: '2px', fontWeight: 400 }}>
-                      Breakfast for <strong>{new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> had to be ordered by{' '}
-                      <strong>8:00 PM on {new Date(new Date(form.order_date + 'T00:00:00').setDate(new Date(form.order_date + 'T00:00:00').getDate() - 1)).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>.
+                      Breakfast for <strong>{new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> had to be ordered by{' '}
+                      <strong>8:00 PM on {new Date(new Date(selectedDate + 'T00:00:00').setDate(new Date(selectedDate + 'T00:00:00').getDate() - 1)).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>.
                     </span>
                   </>
                 ) : (
                   <>
                     <span style={{ fontWeight: 800, fontSize: '13px' }}>
-                      Order by <strong>8:00 PM on {new Date(new Date(form.order_date + 'T00:00:00').setDate(new Date(form.order_date + 'T00:00:00').getDate() - 1)).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>
+                      Order by <strong>8:00 PM on {new Date(new Date(selectedDate + 'T00:00:00').setDate(new Date(selectedDate + 'T00:00:00').getDate() - 1)).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>
                     </span>
                     <span style={{ fontSize: '12px', display: 'block', marginTop: '2px', fontWeight: 400 }}>
-                      Breakfast for <strong>{new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> - order must be placed the evening before.
+                      Breakfast for <strong>{new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> - order must be placed the evening before.
                     </span>
                   </>
                 )
@@ -1718,13 +2577,13 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
                   <>
                     <span style={{ fontWeight: 800, fontSize: '13px' }}>Order window closed</span>
                     <span style={{ fontSize: '12px', display: 'block', marginTop: '2px', fontWeight: 400 }}>
-                      Dinner for <strong>{new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> had to be ordered by <strong>12:00 PM on the same day</strong>.
+                      Dinner for <strong>{new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong> had to be ordered by <strong>12:00 PM on the same day</strong>.
                     </span>
                   </>
                 ) : (
                   <>
                     <span style={{ fontWeight: 800, fontSize: '13px' }}>
-                      Order by <strong>12:00 PM on {new Date(form.order_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>
+                      Order by <strong>12:00 PM on {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</strong>
                     </span>
                     <span style={{ fontSize: '12px', display: 'block', marginTop: '2px', fontWeight: 400 }}>
                       Dinner orders close at noon on the day of the meal.
@@ -1751,7 +2610,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
 
           {/* Progress bar */}
           {!isPast && cutoffDate && (() => {
-            const isBreakfast = selectedType?.name?.toLowerCase() === 'breakfast'
+            const isBreakfast = activeType?.name?.toLowerCase() === 'breakfast'
             const windowMs = isBreakfast ? 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000
             const remaining = Math.max(0, new Date(cutoffDate) - Date.now())
             const pct = Math.min(100, (remaining / windowMs) * 100)
@@ -1770,6 +2629,77 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
         </div>
       )}
 
+      <section className="sd-menu-preview">
+        <div className="sd-menu-preview-head">
+          <div>
+            <p className="sd-home-kicker">Menu for {selectedDateLabel}</p>
+            <h3 className="sd-menu-preview-title">Popular cafe items</h3>
+            <p className="sd-menu-preview-subtitle">
+              A curated look at today&apos;s most-loved cafe picks, with bigger visuals and clearer pricing.
+            </p>
+          </div>
+          <button type="button" className="sd-btn-see-meal" onClick={onOpenMenu}>
+            <BookOpen size={16} strokeWidth={2.2} />
+            View Full Menu
+          </button>
+        </div>
+
+        {loadingMenuPreview ? (
+          <div className="sd-menu-preview-loading">
+            <Spinner size="sm" />
+            <span>Loading menu items...</span>
+          </div>
+        ) : previewItems.length === 0 ? (
+          <div className="sd-package-summary-empty">
+            <UtensilsCrossed size={18} strokeWidth={2.2} />
+            <span>No menu images available right now.</span>
+          </div>
+        ) : (
+          <div className="sd-menu-preview-grid">
+            {previewItems.map((item, index) => (
+              <article
+                key={item.id}
+                className="sd-menu-preview-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenMenu?.()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onOpenMenu?.()
+                  }
+                }}
+              >
+                <div className="sd-menu-preview-media">
+                  <img src={item.image_url} alt={item.name} />
+                  {index < 2 && (
+                    <span className={`sd-menu-preview-badge ${index === 0 ? 'top' : 'chef'}`}>
+                      {index === 0 ? 'Top Pick' : 'Chef Pick'}
+                    </span>
+                  )}
+                </div>
+                <div className="sd-menu-preview-card-body">
+                  <strong>{item.name}</strong>
+                  <div className="sd-menu-preview-card-meta">
+                    <span>Rs. {Number(item.price).toFixed(2)}</span>
+                    <button
+                      type="button"
+                      className="sd-menu-preview-link"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMenu?.()
+                      }}
+                    >
+                      View details in full menu
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
       {showMealMenu && weeklyPlan && (
         <TodayMealModal plan={weeklyPlan} onClose={() => setShowMealMenu(false)} />
       )}
@@ -1779,6 +2709,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
           title="Delivery Address"
           subtitle="Tell us where to deliver this meal package."
           confirmLabel="Confirm Details"
+          showQuantity={false}
           allowCurrentLocation={false}
           requireFeeEstimate={false}
           hasPackage
@@ -1803,6 +2734,7 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
 
       {showTakeaway && (
         <TakeawayModal
+          showQuantity={false}
           onCancel={() => setShowTakeaway(false)}
           onConfirm={({ quantity, phone_number, pickup_note }) => {
             setShowTakeaway(false)
@@ -1817,9 +2749,1097 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
 
       {showPrompt && (
         <AddMenuItemsPrompt
+          deliveryType={normalizePackagePayloads(pendingPayload)[0]?.delivery_type}
+          canAddItems={isMenuItemOrderOpen()}
           onAddItems={handlePromptAddItems}
           onPlaceOnly={handlePromptPlaceOnly}
           onCancel={handlePromptCancel}
+        />
+      )}
+    </div>
+  )
+}
+
+function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, onOpenMenu }) {
+  const { data: menuPreviewItems = [], loading: loadingMenuPreview } = useApi(getStudentItems)
+  const [selectedDate, setSelectedDate] = useState(() => toInputDate(new Date()))
+  const [activeCategoryKey, setActiveCategoryKey] = useState(null)
+  const [focusedMealTime, setFocusedMealTime] = useState('')
+  const [selectedMealTime, setSelectedMealTime] = useState('')
+  const [wizardStep, setWizardStep] = useState(1)
+  const [packageCart, setPackageCart] = useState({})
+  const [cartError, setCartError] = useState('')
+  const [pendingRemovePackage, setPendingRemovePackage] = useState(null)
+  const [showClearPackageCartConfirm, setShowClearPackageCartConfirm] = useState(false)
+  const [showSuggestion, setShowSuggestion] = useState(false)
+  const [suggestedCategoryKey, setSuggestedCategoryKey] = useState('')
+  const [showOrderMethod, setShowOrderMethod] = useState(false)
+  const [deliveryType, setDeliveryType] = useState('takeaway')
+  const [showDelivery, setShowDelivery] = useState(false)
+  const [showTakeaway, setShowTakeaway] = useState(false)
+  const [showPrompt, setShowPrompt] = useState(false)
+  const [pendingPayload, setPendingPayload] = useState(null)
+
+  const todayDate = new Date()
+  const today = toInputDate(todayDate)
+  const maxDate = toInputDate(addDays(todayDate, 3))
+  const cardDate = selectedDate || today
+  const cardDateObj = new Date(`${cardDate}T00:00:00`)
+  const cardDayJs = Number.isNaN(cardDateObj.getTime()) ? new Date().getDay() : cardDateObj.getDay()
+  const cardDayKey = cardDayJs === 0 ? 6 : cardDayJs - 1
+  const isWeekend = cardDayKey === 5 || cardDayKey === 6
+
+  const selectedDateObj = new Date(`${selectedDate}T00:00:00`)
+  const selectedDateLabel = Number.isNaN(selectedDateObj.getTime())
+    ? 'selected date'
+    : selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+  const previewItems = buildPopularPreviewItems(menuPreviewItems)
+  const dateOptions = Array.from({ length: 4 }, (_, index) => {
+    const date = addDays(todayDate, index)
+    const value = toInputDate(date)
+    const label = index === 0
+      ? 'Today'
+      : index === 1
+        ? 'Tomorrow'
+        : date.toLocaleDateString('en-US', { weekday: 'short' })
+    return {
+      value,
+      label,
+      sub: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    }
+  })
+
+  const getDateContext = (dateValue) => {
+    const dateObj = new Date(`${dateValue}T00:00:00`)
+    const dayJs = Number.isNaN(dateObj.getTime()) ? new Date().getDay() : dateObj.getDay()
+    const dayKey = dayJs === 0 ? 6 : dayJs - 1
+    const weekend = dayKey === 5 || dayKey === 6
+    const dateLabel = Number.isNaN(dateObj.getTime())
+      ? 'selected date'
+      : dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+
+    return {
+      dayKey,
+      isWeekend: weekend,
+      dateLabel,
+    }
+  }
+
+  const getPlanPriceForDate = (mealTime, mealCategory, dateValue) => {
+    const normalizedMeal = mealTime?.toLowerCase()
+    if (!normalizedMeal) return null
+    const { dayKey, isWeekend: weekend } = getDateContext(dateValue)
+    const effectiveDayKey = normalizedMeal === 'lunch' && weekend ? 5 : dayKey
+    const slot = weeklyPlan?.[`${effectiveDayKey}_${normalizedMeal}_${mealCategory}`]
+    if (slot?.price === null || slot?.price === undefined || slot?.price === '') return null
+    const priceNum = Number(slot.price)
+    return Number.isFinite(priceNum) ? priceNum.toFixed(2) : null
+  }
+
+  const getPlanPrice = (mealTime, mealCategory) => getPlanPriceForDate(mealTime, mealCategory, selectedDate)
+
+  const getPlanSlotForDate = (mealTime, mealCategory, dateValue) => {
+    const normalizedMeal = mealTime?.toLowerCase()
+    if (!normalizedMeal) return null
+    const { dayKey, isWeekend: weekend } = getDateContext(dateValue)
+    const effectiveDayKey = normalizedMeal === 'lunch' && weekend ? 5 : dayKey
+    return weeklyPlan?.[`${effectiveDayKey}_${normalizedMeal}_${mealCategory}`] || null
+  }
+
+  const getPlanSlot = (mealTime, mealCategory) => getPlanSlotForDate(mealTime, mealCategory, selectedDate)
+
+  const buildPackageEntryForDate = (mealTime, mealCategory, dateValue) => {
+    const slot = getPlanSlotForDate(mealTime, mealCategory, dateValue)
+    if (!slot) return null
+
+    const { dateLabel } = getDateContext(dateValue)
+    const normalizedMeal = normalizeMealSlotName(mealTime)
+    const slotKey = `${dateValue}_${mealTime}_${mealCategory}`
+    const matchingMealType = mealTypes.find((type) => normalizeMealSlotName(type?.name) === normalizedMeal)
+    const slotMeta = SLOT_META[slotKey] || {
+      icon: UtensilsCrossed,
+      color: T.coffeeMid,
+      bg: 'rgba(196,149,106,0.08)',
+      border: 'rgba(196,149,106,0.2)',
+    }
+    const timing = getPackageTimingDetails(mealTime)
+    const price = getPlanPriceForDate(mealTime, mealCategory, dateValue)
+    const cutoff = matchingMealType ? getCutoffDate(matchingMealType.name, dateValue) : null
+    const closed = Boolean(cutoff) && new Date() > cutoff
+    const preference = mealCategory === 'nonveg' ? 'non-veg' : 'veg'
+
+    return {
+      key: slotKey,
+      mealTime,
+      orderDate: dateValue,
+      dateLabel,
+      mealTypeId: matchingMealType?.id || null,
+      mealTypeName: matchingMealType?.name || timing.title,
+      categoryKey: mealCategory,
+      preference,
+      canOrder: Boolean(matchingMealType?.id),
+      closed,
+      title: timing.title,
+      orderText: timing.orderText,
+      readyText: timing.readyText,
+      priceLabel: price ? `LKR ${price}` : 'LKR price updating...',
+      priceValue: Number(price || 0),
+      dishes: Array.isArray(slot?.dishes) ? slot.dishes : [],
+      icon: slotMeta.icon,
+      color: slotMeta.color,
+      background: slotMeta.bg,
+      border: slotMeta.border,
+    }
+  }
+
+  const buildPackageEntry = (mealTime, mealCategory) => buildPackageEntryForDate(mealTime, mealCategory, selectedDate)
+
+  const categoryCards = ['veg', 'nonveg'].map((categoryKey) => {
+    const meta = PACKAGE_CATEGORY_META[categoryKey]
+    const mealTimes = categoryKey === 'nonveg' && isWeekend
+      ? ['breakfast', 'dinner', 'lunch']
+      : ['breakfast', 'dinner']
+    const packages = mealTimes
+      .map((mealTime) => buildPackageEntry(mealTime, categoryKey))
+      .filter(Boolean)
+    const breakfastPackage = packages.find((pkg) => pkg.mealTime === 'breakfast') || null
+    const lunchPackage = packages.find((pkg) => pkg.mealTime === 'lunch') || null
+    const dinnerPackage = packages.find((pkg) => pkg.mealTime === 'dinner') || null
+
+    return {
+      ...meta,
+      key: categoryKey,
+      packages,
+      summaryTitles: packages.map((pkg) => pkg.title),
+      breakfastPackage,
+      lunchPackage,
+      dinnerPackage,
+      dateLabel: selectedDateLabel,
+    }
+  })
+
+  const categoryLookup = categoryCards.reduce((acc, category) => {
+    acc[category.key] = category
+    return acc
+  }, {})
+
+  const getInitialCategoryMealTime = (category) => {
+    if (!category?.packages?.length) return ''
+    const firstActivePackage = category.packages.find((pkg) => pkg.canOrder && !pkg.closed)
+    return firstActivePackage?.mealTime || category.packages[0]?.mealTime || ''
+  }
+
+  const findFirstActiveCategorySelection = (categoryKey) => {
+    const orderedDates = [selectedDate, ...dateOptions.map((option) => option.value).filter((value) => value !== selectedDate)]
+
+    for (const dateValue of orderedDates) {
+      const { isWeekend: weekend } = getDateContext(dateValue)
+      const mealTimes = categoryKey === 'nonveg' && weekend
+        ? ['breakfast', 'dinner', 'lunch']
+        : ['breakfast', 'dinner']
+      const packages = mealTimes
+        .map((mealTime) => buildPackageEntryForDate(mealTime, categoryKey, dateValue))
+        .filter(Boolean)
+      const firstActivePackage = packages.find((pkg) => pkg.canOrder && !pkg.closed)
+      if (firstActivePackage) {
+        return {
+          dateValue,
+          mealTime: firstActivePackage.mealTime,
+        }
+      }
+    }
+
+    return {
+      dateValue: selectedDate,
+      mealTime: getInitialCategoryMealTime(categoryLookup[categoryKey]),
+    }
+  }
+
+  const cartEntries = Object.values(packageCart)
+  const cartCount = cartEntries.reduce((sum, entry) => sum + entry.quantity, 0)
+  const cartTotal = cartEntries.reduce((sum, entry) => sum + (Number(entry.priceValue) || 0) * entry.quantity, 0)
+  const lockedPackageEntry = cartEntries[0] || null
+  const lockedMealTime = lockedPackageEntry?.mealTime || ''
+  const lockedDate = lockedPackageEntry?.orderDate || ''
+  const lockedDateLabel = lockedPackageEntry?.dateLabel || ''
+  const lockedMealTitle = lockedPackageEntry?.title || 'Selected package'
+  const lockedReadyTime = getPackageReadyTime(lockedPackageEntry?.mealTypeName || lockedPackageEntry?.mealTime)
+
+  useEffect(() => {
+    if (lockedPackageEntry?.mealTime) {
+      setSelectedMealTime(normalizeMealSlotName(lockedPackageEntry.mealTime))
+      setWizardStep(3)
+    }
+  }, [lockedPackageEntry?.mealTime])
+
+  const openPackageCategory = (categoryKey, mealTime = '', dateValue = selectedDate) => {
+    setSelectedDate(dateValue || selectedDate)
+    setSelectedMealTime(normalizeMealSlotName(mealTime))
+    setWizardStep(3)
+    setFocusedMealTime(mealTime || '')
+    setActiveCategoryKey(categoryKey)
+  }
+
+  const addPackageToCart = (pkg) => {
+    if (!pkg?.canOrder || pkg?.closed) return
+    if (lockedPackageEntry) {
+      const sameDate = pkg.orderDate === lockedDate
+      const sameMealSlot = normalizeMealSlotName(pkg.mealTime) === normalizeMealSlotName(lockedMealTime)
+      if (!sameDate || !sameMealSlot) {
+        setCartError(`${lockedMealTitle} is already selected for ${lockedDateLabel}. Clear the cart to switch to another meal slot or date.`)
+        return
+      }
+    }
+    setPackageCart((prev) => {
+      const current = prev[pkg.key]
+      const nextQuantity = Math.min(MAX_PACKAGE_QUANTITY, (current?.quantity || 0) + 1)
+      return {
+        ...prev,
+        [pkg.key]: {
+          ...pkg,
+          label: `${pkg.preference === 'non-veg' ? 'Non-Veg' : 'Veg'} ${pkg.title}`,
+          dateLabel: pkg.dateLabel,
+          orderDate: pkg.orderDate,
+          quantity: nextQuantity,
+        },
+      }
+    })
+    setCartError('')
+  }
+
+  const handleSelectedDateChange = (nextDate) => {
+    if (lockedPackageEntry && nextDate !== lockedDate) {
+      setCartError(`${lockedMealTitle} is already selected for ${lockedDateLabel}. Clear the cart to switch to another date.`)
+      return
+    }
+    setSelectedDate(nextDate)
+    if (!lockedPackageEntry) {
+      setSelectedMealTime('')
+      setWizardStep(2)
+    }
+    setCartError('')
+  }
+
+  const getPackageCartLabel = (pkg) => {
+    const dateText = pkg?.dateLabel ? ` for ${pkg.dateLabel}` : ''
+    if (pkg?.label) return `${pkg.label}${dateText}`
+    if (pkg?.preference && pkg?.title) {
+      return `${pkg.preference === 'non-veg' ? 'Non-Veg' : 'Veg'} ${pkg.title}${dateText}`
+    }
+    return `${pkg?.title || 'this package'}${dateText}`
+  }
+
+  const decreasePackageInCart = (pkg) => {
+    const key = typeof pkg === 'string' ? pkg : pkg?.key
+    if (!key) return
+
+    const currentEntry = packageCart[key]
+    if (currentEntry?.quantity === 1) {
+      setPendingRemovePackage({
+        key,
+        name: getPackageCartLabel(currentEntry),
+      })
+      return
+    }
+
+    setPackageCart((prev) => {
+      const next = { ...prev }
+      if (!next[key]) return prev
+      if (next[key].quantity <= 1) {
+        delete next[key]
+        return next
+      }
+      next[key] = { ...next[key], quantity: next[key].quantity - 1 }
+      return next
+    })
+  }
+
+  const removePackageFromCart = (key) => {
+    setPackageCart((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+  const requestRemovePackageFromCart = (pkg) => {
+    const key = typeof pkg === 'string' ? pkg : pkg?.key
+    if (!key) return
+    const currentEntry = typeof pkg === 'string' ? packageCart[key] : pkg
+    setPendingRemovePackage({
+      key,
+      name: getPackageCartLabel(currentEntry),
+    })
+  }
+
+  const confirmRemovePackageFromCart = () => {
+    if (!pendingRemovePackage?.key) return
+    removePackageFromCart(pendingRemovePackage.key)
+    setPendingRemovePackage(null)
+  }
+
+  const clearPackageCart = () => {
+    setPackageCart({})
+    setCartError('')
+    setShowClearPackageCartConfirm(false)
+    setSelectedMealTime('')
+    setWizardStep(1)
+  }
+
+  const buildPayloadAndPrompt = ({
+    detailsText = '',
+    phoneNumber = '',
+    addressLine1 = '',
+    addressLine2 = '',
+    cityArea = '',
+    locationSource = 'address',
+    deliveryLatitude = null,
+    deliveryLongitude = null,
+  }) => {
+    const payloads = cartEntries
+      .filter((entry) => entry.mealTypeId)
+      .map((entry) => ({
+        meal_type: Number(entry.mealTypeId),
+        order_date: entry.orderDate || selectedDate,
+        delivery_type: deliveryType,
+        quantity: entry.quantity,
+        delivery_address: detailsText,
+        address_line_1: addressLine1,
+        address_line_2: addressLine2,
+        city_area: cityArea,
+        location_source: locationSource,
+        delivery_latitude: deliveryLatitude,
+        delivery_longitude: deliveryLongitude,
+        phone_number: phoneNumber,
+        order_type: 'package',
+        preference: entry.preference,
+      }))
+
+    if (payloads.length === 0) {
+      setCartError('Add at least one breakfast, lunch, or dinner package to continue.')
+      return
+    }
+
+    const payload = payloads.length === 1 ? payloads[0] : payloads
+    setPendingPayload(payload)
+    setShowPrompt(true)
+  }
+
+  const resetPackageCheckout = () => {
+    setPackageCart({})
+    setPendingPayload(null)
+    setShowPrompt(false)
+    setShowDelivery(false)
+    setShowTakeaway(false)
+    setShowOrderMethod(false)
+    setShowSuggestion(false)
+    setSuggestedCategoryKey('')
+    setCartError('')
+    setPendingRemovePackage(null)
+    setShowClearPackageCartConfirm(false)
+    setActiveCategoryKey(null)
+    setFocusedMealTime('')
+    setSelectedMealTime('')
+    setWizardStep(1)
+  }
+
+  const handlePromptPlaceOnly = async () => {
+    setShowPrompt(false)
+    await onPackageReady(pendingPayload, false)
+    resetPackageCheckout()
+  }
+
+  const handlePromptAddItems = async () => {
+    const didQueueMenuItems = await onPackageReady(pendingPayload, true)
+    if (!didQueueMenuItems) return
+    setShowPrompt(false)
+    resetPackageCheckout()
+  }
+
+  const handleContinueFromCart = () => {
+    if (cartEntries.length === 0) {
+      setCartError('Add at least one meal package to your cart first.')
+      return
+    }
+
+    const selectedCategories = [...new Set(cartEntries.map((entry) => entry.categoryKey))]
+    const selectedMealTime = normalizeMealSlotName(cartEntries[0]?.mealTime)
+    if (selectedCategories.length === 1) {
+      const currentCategoryKey = selectedCategories[0]
+      const suggestedKey = currentCategoryKey === 'veg' ? 'nonveg' : 'veg'
+      const suggestedCategory = categoryLookup[suggestedKey]
+      const hasOrderableSuggestedPackage = suggestedCategory?.packages?.some(
+        (pkg) => pkg.canOrder && !pkg.closed && normalizeMealSlotName(pkg.mealTime) === selectedMealTime
+      )
+      if (hasOrderableSuggestedPackage) {
+        setSuggestedCategoryKey(suggestedKey)
+        setShowSuggestion(true)
+        return
+      }
+    }
+
+    setShowOrderMethod(true)
+  }
+
+  const activeCategory = activeCategoryKey ? categoryLookup[activeCategoryKey] || null : null
+
+  const activeCategoryWithCart = activeCategory
+    ? {
+        ...activeCategory,
+        packages: activeCategory.packages.map((pkg) => ({
+          ...pkg,
+          selectionBlocked: Boolean(lockedPackageEntry)
+            && (
+              pkg.orderDate !== lockedDate
+              || normalizeMealSlotName(pkg.mealTime) !== normalizeMealSlotName(lockedMealTime)
+            ),
+          selectionBlockedReason: lockedPackageEntry
+            ? `${lockedMealTitle} is already selected for ${lockedDateLabel}. Clear the cart to switch to ${pkg.title.toLowerCase()}.`
+            : '',
+          cartQuantity: packageCart[pkg.key]?.quantity || 0,
+        })),
+      }
+    : null
+
+  const packageSelectionHint = lockedPackageEntry
+    ? `${lockedMealTitle} is selected for ${lockedDateLabel}. You can keep adding veg or non-veg only for this meal slot. Ready time: ${lockedReadyTime || 'scheduled meal time'}.`
+    : 'Choose one meal slot for the selected date. After you select Breakfast, Lunch, or Dinner, the other meal slots become unavailable for this checkout. You can still add veg or non-veg within the selected slot.'
+
+  const packageOrderMethodOptions = lockedPackageEntry ? [
+    {
+      value: 'takeaway',
+      label: 'Takeaway',
+      sub: `Pickup at ${lockedReadyTime || 'the scheduled meal time'}`,
+      icon: Package2,
+    },
+    {
+      value: 'delivery',
+      label: 'Delivery',
+      sub: `Deliver at ${lockedReadyTime || 'the scheduled meal time'}`,
+      icon: Truck,
+    },
+  ] : null
+
+  const packageTakeawaySubtitle = lockedPackageEntry
+    ? `This ${lockedMealTitle.toLowerCase()} will be ready at ${lockedReadyTime || 'the scheduled meal time'}. Add a phone number and optional pickup note below.`
+    : 'Add your contact details before placing this meal package order.'
+  const packageDeliverySubtitle = lockedPackageEntry
+    ? `This ${lockedMealTitle.toLowerCase()} will be delivered at ${lockedReadyTime || 'the scheduled meal time'}. Enter your address and phone number below.`
+    : 'Tell us where to deliver this meal package order.'
+
+  const mealSlotCards = ['breakfast', 'lunch', 'dinner'].map((mealTime) => {
+    const meta = PACKAGE_MEAL_META[mealTime]
+    const timing = getPackageTimingDetails(mealTime)
+    const choices = ['veg', 'nonveg'].map((categoryKey) => {
+      const pkg = buildPackageEntryForDate(mealTime, categoryKey, selectedDate)
+      const isLockedToOtherMeal = Boolean(lockedPackageEntry)
+        && normalizeMealSlotName(lockedMealTime) !== normalizeMealSlotName(mealTime)
+      const disabled = isLockedToOtherMeal || !pkg?.canOrder || pkg?.closed
+      const helper = isLockedToOtherMeal
+        ? 'Unavailable for this checkout'
+        : !pkg?.canOrder
+          ? 'Not available'
+          : pkg?.closed
+            ? 'Closed'
+            : pkg?.priceLabel || 'View details'
+
+      return {
+        categoryKey,
+        label: categoryKey === 'veg' ? 'Veg' : 'Non-Veg',
+        pkg,
+        disabled,
+        helper,
+      }
+    })
+
+    const scheduledChoices = choices.filter((choice) => choice.pkg)
+    const orderableChoices = scheduledChoices.filter((choice) => choice.pkg?.canOrder)
+    const availableChoices = orderableChoices.filter((choice) => !choice.pkg?.closed)
+    const priceValues = availableChoices
+      .map((choice) => Number(choice.pkg?.priceValue) || 0)
+      .filter((value) => value > 0)
+    const fallbackPriceValues = orderableChoices
+      .map((choice) => Number(choice.pkg?.priceValue) || 0)
+      .filter((value) => value > 0)
+    const fromPrice = priceValues[0] || fallbackPriceValues[0] || 0
+
+    let statusTone = 'closed'
+    let statusLabel = 'Not scheduled'
+    let helperText = 'We are preparing this package for another day.'
+
+    if (lockedPackageEntry && normalizeMealSlotName(lockedMealTime) !== normalizeMealSlotName(mealTime)) {
+      statusTone = 'muted'
+      statusLabel = 'Locked by your cart'
+      helperText = `${lockedMealTitle} is already selected for ${lockedDateLabel}. Clear the cart to switch meal time.`
+    } else if (mealTime === 'lunch' && !isWeekend) {
+      statusTone = 'info'
+      statusLabel = 'Weekend only'
+      helperText = 'Lunch packages are available on Saturday and Sunday only.'
+    } else if (availableChoices.length > 1) {
+      statusTone = 'open'
+      statusLabel = 'Veg & Non-Veg available'
+      helperText = 'Choose the option you want below and we will open the right package details.'
+    } else if (availableChoices.length === 1) {
+      statusTone = 'open'
+      statusLabel = `${availableChoices[0].label} available`
+      helperText = availableChoices[0].categoryKey === 'nonveg' && mealTime === 'lunch'
+        ? 'Weekend lunch is currently available under Non-Veg.'
+        : 'One package option is ready to order right now.'
+    } else if (orderableChoices.length > 0) {
+      statusTone = 'closed'
+      statusLabel = 'Closed for this day'
+      helperText = 'The ordering cutoff has already passed for this date.'
+    }
+
+    return {
+      mealTime,
+      title: meta.label,
+      Icon: meta.icon,
+      orderText: timing.orderText,
+      readyText: timing.readyText,
+      statusTone,
+      statusLabel,
+      helperText,
+      choices,
+      canProceed: availableChoices.length > 0,
+      fromPrice: fromPrice > 0 ? `From LKR ${fromPrice.toFixed(2)}` : 'Price updating',
+    }
+  })
+
+  const selectedMealCard = mealSlotCards.find((slot) => slot.mealTime === selectedMealTime) || null
+  const packagePreviewCards = [
+    {
+      key: 'breakfast',
+      title: 'Breakfast',
+      subtitle: 'Veg or Non-Veg',
+      orderText: getPackageTimingDetails('breakfast').orderText,
+      readyText: getPackageTimingDetails('breakfast').readyText,
+      Icon: PACKAGE_MEAL_META.breakfast.icon,
+    },
+    {
+      key: 'lunch',
+      title: 'Lunch',
+      subtitle: 'Weekend Non-Veg',
+      orderText: getPackageTimingDetails('lunch').orderText,
+      readyText: getPackageTimingDetails('lunch').readyText,
+      Icon: PACKAGE_MEAL_META.lunch.icon,
+    },
+    {
+      key: 'dinner',
+      title: 'Dinner',
+      subtitle: 'Veg or Non-Veg',
+      orderText: getPackageTimingDetails('dinner').orderText,
+      readyText: getPackageTimingDetails('dinner').readyText,
+      Icon: PACKAGE_MEAL_META.dinner.icon,
+    },
+  ]
+  const wizardProgress = [
+    {
+      number: 1,
+      label: 'Date',
+      active: wizardStep === 1,
+      complete: wizardStep > 1,
+    },
+    {
+      number: 2,
+      label: 'Meal',
+      active: wizardStep === 2,
+      complete: wizardStep > 2,
+    },
+    {
+      number: 3,
+      label: 'Package',
+      active: wizardStep === 3 || Boolean(activeCategoryKey),
+      complete: Boolean(activeCategoryKey) || cartEntries.length > 0,
+    },
+  ]
+
+  return (
+    <div className="sd-panel">
+      <div
+        className="sd-panel-header"
+        style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}
+      >
+        <div>
+          <h2 className="sd-panel-title">Meal Packages</h2>
+          <p className="sd-panel-subtitle">Breakfast 7:30 AM  •  Lunch 12:30 PM  •  Dinner 7:00 PM</p>
+        </div>
+      </div>
+
+      <section className="sd-package-flow-shell">
+        <div className="sd-package-flow-head">
+          <div>
+            <h3 className="sd-home-title">Choose Your Package</h3>
+            <p className="sd-home-copy">For {selectedDateLabel}</p>
+          </div>
+
+          <div className="sd-package-progress">
+            {wizardProgress.map((step) => (
+              <div
+                key={step.number}
+                className={`sd-package-progress-step${step.active ? ' active' : ''}${step.complete ? ' complete' : ''}`}
+              >
+                <span className="sd-package-progress-number">{step.number}</span>
+                <span className="sd-package-progress-label">{step.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="sd-package-preview-band">
+          <div className="sd-package-preview-copy">
+            <p className="sd-home-kicker">What You Can Order</p>
+            <h4 className="sd-package-preview-title">Meal package options</h4>
+            <p className="sd-package-preview-text">Pick the date after you decide whether you want Breakfast, Lunch, or Dinner.</p>
+          </div>
+
+          <div className="sd-package-preview-grid">
+            {packagePreviewCards.map((item) => {
+              const ItemIcon = item.Icon
+              return (
+                <article key={item.key} className="sd-package-preview-card">
+                  <div className="sd-package-preview-card-head">
+                    <span className="sd-package-preview-icon">
+                      <ItemIcon size={17} strokeWidth={2.2} />
+                    </span>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <small>{item.subtitle}</small>
+                    </div>
+                  </div>
+
+                  <div className="sd-package-preview-meta">
+                    <span>
+                      <Clock3 size={14} strokeWidth={2.2} />
+                      {item.orderText}
+                    </span>
+                    <span>
+                      <Package2 size={14} strokeWidth={2.2} />
+                      {item.readyText}
+                    </span>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="sd-package-focus-card">
+          {wizardStep === 1 && (
+            <>
+              <div className="sd-package-question-head">
+                <div className="sd-package-focus-copy">
+                  <p className="sd-home-kicker">Step 1 of 3</p>
+                  <h3 className="sd-home-title">Which day do you want your package for?</h3>
+                  <p className="sd-home-copy">Select a date.</p>
+                </div>
+
+                <div className="sd-package-question-aside">
+                  <span className="sd-package-question-aside-label">Selected Day</span>
+                  <strong>{selectedDateLabel}</strong>
+                  <small>Next: choose meal time</small>
+                </div>
+              </div>
+
+              <div className="sd-package-date-panel compact-card">
+                <div className="sd-date-strip compact">
+                  {dateOptions.map((option) => {
+                    const isLockedOut = Boolean(lockedPackageEntry) && option.value !== lockedDate
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`sd-date-chip${selectedDate === option.value ? ' active' : ''}${isLockedOut ? ' disabled' : ''}`}
+                        onClick={() => handleSelectedDateChange(option.value)}
+                        disabled={isLockedOut}
+                      >
+                        <span>{option.label}</span>
+                        <small>{option.sub}</small>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <input
+                  type="date"
+                  className="sd-date-picker"
+                  value={selectedDate}
+                  min={today}
+                  max={maxDate}
+                  onChange={(e) => handleSelectedDateChange(e.target.value)}
+                  disabled={Boolean(lockedPackageEntry)}
+                />
+
+                <div className={`sd-package-lock-note${lockedPackageEntry ? '' : ' soft'}`}>
+                  {lockedPackageEntry
+                    ? `${lockedMealTitle} is selected for ${lockedDateLabel}. Other dates and meal times stay inactive until you clear the cart.`
+                    : 'One meal slot per date. Choose Veg or Non-Veg after the meal step.'}
+                </div>
+              </div>
+
+              <div className="sd-package-step-actions centered highlight">
+                <button type="button" className="sd-btn-primary" onClick={() => setWizardStep(2)}>
+                  Use {selectedDateLabel} and Continue
+                </button>
+              </div>
+            </>
+          )}
+
+          {wizardStep === 2 && (
+            <>
+              <div className="sd-package-question-head">
+                <div className="sd-package-focus-copy">
+                  <p className="sd-home-kicker">Step 2 of 3</p>
+                  <h3 className="sd-home-title">What meal do you want on {selectedDateLabel}?</h3>
+                  <p className="sd-home-copy">Choose one meal time.</p>
+                </div>
+
+                <div className="sd-package-question-aside compact">
+                  <span className="sd-package-question-aside-label">Selected Day</span>
+                  <strong>{selectedDateLabel}</strong>
+                </div>
+              </div>
+
+              {loadingTypes ? (
+                <div className="sd-package-summary-empty">
+                  <Spinner size="sm" />
+                  <span>Loading meal packages...</span>
+                </div>
+              ) : (
+                <div className="sd-package-slot-grid focus">
+                  {mealSlotCards.map((slot) => {
+                    const SlotIcon = slot.Icon
+                    const isSelected = selectedMealTime === slot.mealTime
+                    return (
+                      <article key={slot.mealTime} className={`sd-package-slot-card ${slot.statusTone}${isSelected ? ' selected' : ''}`}>
+                        <div className="sd-package-slot-card-top">
+                          <div className="sd-package-slot-title-group">
+                            <span className="sd-package-slot-icon">
+                              <SlotIcon size={18} strokeWidth={2.2} />
+                            </span>
+                            <div className="sd-package-slot-title-copy">
+                              <strong>{slot.title}</strong>
+                              <small>{slot.fromPrice}</small>
+                            </div>
+                          </div>
+                          <span className={`sd-package-slot-status ${slot.statusTone}`}>{slot.statusLabel}</span>
+                        </div>
+
+                        <div className="sd-package-slot-meta">
+                          <span className="sd-package-slot-meta-line">
+                            <Clock3 size={15} strokeWidth={2.2} />
+                            {slot.orderText}
+                          </span>
+                          <span className="sd-package-slot-meta-line">
+                            <Package2 size={15} strokeWidth={2.2} />
+                            {slot.readyText}
+                          </span>
+                        </div>
+
+                        <p className="sd-package-slot-note">{slot.helperText}</p>
+
+                        <button
+                          type="button"
+                          className="sd-package-slot-cta"
+                          disabled={!slot.canProceed}
+                          onClick={() => {
+                            setSelectedMealTime(slot.mealTime)
+                            setWizardStep(3)
+                            setCartError('')
+                          }}
+                        >
+                          {slot.canProceed ? `Choose ${slot.title}` : slot.statusLabel}
+                        </button>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="sd-package-step-actions">
+                <button type="button" className="sd-btn-secondary" onClick={() => setWizardStep(1)}>
+                  Back
+                </button>
+              </div>
+            </>
+          )}
+
+          {wizardStep === 3 && selectedMealCard && (
+            <>
+              <div className="sd-package-question-head">
+                <div className="sd-package-focus-copy">
+                  <p className="sd-home-kicker">Step 3 of 3</p>
+                  <h3 className="sd-home-title">Do you want Veg or Non-Veg {selectedMealCard.title}?</h3>
+                  <p className="sd-home-copy">{selectedMealCard.title} for {selectedDateLabel}</p>
+                </div>
+
+                <div className="sd-package-question-aside compact">
+                  <span className="sd-package-question-aside-label">Selected Meal</span>
+                  <strong>{selectedMealCard.title}</strong>
+                  <small>{selectedDateLabel}</small>
+                </div>
+              </div>
+
+              <div className="sd-package-selected-meal-card">
+                <div className="sd-package-focus-summary">
+                  <span className="sd-package-guide-chip">Date: {selectedDateLabel}</span>
+                  <span className="sd-package-guide-chip">Meal: {selectedMealCard.title}</span>
+                </div>
+
+                <div className="sd-package-slot-meta">
+                  <span className="sd-package-slot-meta-line">
+                    <Clock3 size={15} strokeWidth={2.2} />
+                    {selectedMealCard.orderText}
+                  </span>
+                  <span className="sd-package-slot-meta-line">
+                    <Package2 size={15} strokeWidth={2.2} />
+                    {selectedMealCard.readyText}
+                  </span>
+                </div>
+                <p className="sd-package-slot-note">{selectedMealCard.helperText}</p>
+              </div>
+
+              <div className="sd-package-choice-row wizard">
+                {selectedMealCard.choices.map((choice) => (
+                  <button
+                    key={`${selectedMealCard.mealTime}_${choice.categoryKey}`}
+                    type="button"
+                    className={`sd-package-choice-btn ${choice.categoryKey}`}
+                    disabled={choice.disabled}
+                    onClick={() => {
+                      if (!choice.pkg) return
+                      openPackageCategory(choice.categoryKey, selectedMealCard.mealTime, selectedDate)
+                    }}
+                  >
+                    <span>{choice.label}</span>
+                    <small>{choice.helper}</small>
+                  </button>
+                ))}
+              </div>
+
+              <div className="sd-package-step-actions">
+                <button
+                  type="button"
+                  className="sd-btn-secondary"
+                  onClick={() => {
+                    setSelectedMealTime('')
+                    setWizardStep(2)
+                  }}
+                >
+                  Back
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
+
+      <section className="sd-menu-preview sd-menu-preview-inline">
+        <div className="sd-menu-preview-head">
+          <div>
+            <h3 className="sd-menu-preview-title">Popular Menu Items</h3>
+          </div>
+          <button type="button" className="sd-btn-see-meal" onClick={onOpenMenu}>
+            <BookOpen size={16} strokeWidth={2.2} />
+            View Full Menu
+          </button>
+        </div>
+
+        {loadingMenuPreview ? (
+          <div className="sd-menu-preview-loading">
+            <Spinner size="sm" />
+            <span>Loading menu items...</span>
+          </div>
+        ) : previewItems.length === 0 ? (
+          <div className="sd-package-summary-empty">
+            <UtensilsCrossed size={18} strokeWidth={2.2} />
+            <span>No menu items available right now.</span>
+          </div>
+        ) : (
+          <div className="sd-menu-preview-grid">
+            {previewItems.slice(0, 6).map((item, index) => (
+              <article
+                key={item.id}
+                className="sd-menu-preview-card"
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenMenu?.()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onOpenMenu?.()
+                  }
+                }}
+              >
+                <div className="sd-menu-preview-media">
+                  <img src={item.image_url} alt={item.name} />
+                  {index < 2 && (
+                    <span className={`sd-menu-preview-badge ${index === 0 ? 'top' : 'chef'}`}>
+                      {index === 0 ? 'Top Pick' : 'Chef Pick'}
+                    </span>
+                  )}
+                </div>
+                <div className="sd-menu-preview-card-body">
+                  <strong>{item.name}</strong>
+                  <div className="sd-menu-preview-card-meta">
+                    <span>Rs. {Number(item.price).toFixed(2)}</span>
+                    <button
+                      type="button"
+                      className="sd-menu-preview-link"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMenu?.()
+                      }}
+                    >
+                      View details
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {activeCategoryWithCart && (
+        <PackageCategoryDetailsModal
+          category={activeCategoryWithCart}
+          selectedDate={selectedDate}
+          dateOptions={dateOptions}
+          maxDate={maxDate}
+          cartEntries={cartEntries}
+          cartCount={cartCount}
+          cartTotal={cartTotal}
+          cartError={cartError}
+          onDateChange={handleSelectedDateChange}
+          onAddPackage={addPackageToCart}
+          onDecreasePackage={decreasePackageInCart}
+          onRemovePackage={requestRemovePackageFromCart}
+          onClearCart={() => setShowClearPackageCartConfirm(true)}
+          onContinue={handleContinueFromCart}
+          selectionHint={packageSelectionHint}
+          lockedDateValue={lockedDate}
+          focusMealTime={focusedMealTime}
+          onClose={() => {
+            setActiveCategoryKey(null)
+            setFocusedMealTime('')
+          }}
+        />
+      )}
+
+      {pendingRemovePackage && (
+        <ConfirmDialog
+          title="Remove package?"
+          message={`Do you want to remove ${pendingRemovePackage.name} from your cart?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemovePackageFromCart}
+          onCancel={() => setPendingRemovePackage(null)}
+        />
+      )}
+
+      {showClearPackageCartConfirm && (
+        <ConfirmDialog
+          title="Clear cart?"
+          message="Are you sure you want to remove all meal packages from your cart?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          onConfirm={clearPackageCart}
+          onCancel={() => setShowClearPackageCartConfirm(false)}
+        />
+      )}
+
+      {showSuggestion && (
+        <PackageSuggestionModal
+          suggestedLabel={suggestedCategoryKey === 'nonveg' ? 'Non-Veg' : 'Veg'}
+          mealTitle={lockedMealTitle}
+          onAddOther={() => {
+            setShowSuggestion(false)
+            const nextCategory = categoryLookup[suggestedCategoryKey]
+            if (nextCategory) {
+              setFocusedMealTime(lockedMealTime)
+              setActiveCategoryKey(nextCategory.key)
+            }
+          }}
+          onContinue={() => {
+            setShowSuggestion(false)
+            setShowOrderMethod(true)
+          }}
+          onClose={() => setShowSuggestion(false)}
+        />
+      )}
+
+      {showOrderMethod && (
+        <OrderMethodModal
+          title="Choose Order Method"
+          subtitle="Select how you would like to receive this meal package order."
+          options={packageOrderMethodOptions}
+          onSelect={(method) => {
+            setDeliveryType(method)
+            setShowOrderMethod(false)
+            if (method === 'delivery') {
+              setShowDelivery(true)
+              return
+            }
+            setShowTakeaway(true)
+          }}
+          onCancel={() => setShowOrderMethod(false)}
+        />
+      )}
+
+      {showDelivery && (
+        <DeliveryModal
+          title="Delivery Address"
+          subtitle={packageDeliverySubtitle}
+          confirmLabel="Confirm Details"
+          showQuantity={false}
+          allowCurrentLocation={false}
+          requireFeeEstimate={false}
+          hasPackage
+          deliveryIncludedText="Free delivery is included for meal package checkout."
+          onCancel={() => setShowDelivery(false)}
+          onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
+            setShowDelivery(false)
+            buildPayloadAndPrompt({
+              detailsText: delivery_address,
+              phoneNumber: phone_number,
+              addressLine1: address_line_1,
+              addressLine2: address_line_2,
+              cityArea: city_area,
+              locationSource: location_source,
+              deliveryLatitude: delivery_latitude,
+              deliveryLongitude: delivery_longitude,
+            })
+          }}
+        />
+      )}
+
+      {showTakeaway && (
+        <TakeawayModal
+          title="Pickup Details"
+          subtitle={packageTakeawaySubtitle}
+          showQuantity={false}
+          onCancel={() => setShowTakeaway(false)}
+          onConfirm={({ phone_number, pickup_note }) => {
+            setShowTakeaway(false)
+            buildPayloadAndPrompt({
+              detailsText: pickup_note,
+              phoneNumber: phone_number,
+            })
+          }}
+        />
+      )}
+
+      {showPrompt && (
+        <AddMenuItemsPrompt
+          deliveryType={normalizePackagePayloads(pendingPayload)[0]?.delivery_type}
+          canAddItems={isMenuItemOrderOpen()}
+          onAddItems={handlePromptAddItems}
+          onPlaceOnly={handlePromptPlaceOnly}
+          onCancel={() => {
+            setShowPrompt(false)
+            setPendingPayload(null)
+          }}
         />
       )}
     </div>
@@ -1933,10 +3953,12 @@ const compareMenuItemsByCode = (a, b) => {
 function MenuItemsPanel({
   refetchOrders,
   pendingPackageOrder,
+  onPendingPackageOrderChange,
   onPackageOrderSent,
   showToast,
   onOrderSuccess,
   mealTypes = [],
+  weeklyPlan = {},
   onFloatingCartBarChange,
 }) {
   const { data: rawItems = [], loading: loadingItems } = useApi(getStudentItems)
@@ -1953,7 +3975,24 @@ function MenuItemsPanel({
   const [pendingRemoveItem, setPendingRemoveItem] = useState(null)
   const [showClearCartConfirm, setShowClearCartConfirm] = useState(false)
   const [showShopClosedConfirm, setShowShopClosedConfirm] = useState(false)
+  const [pendingRemoveCartPackage, setPendingRemoveCartPackage] = useState(null)
+  const [showClearMenuPackagesConfirm, setShowClearMenuPackagesConfirm] = useState(false)
+  const [combinedOrderReview, setCombinedOrderReview] = useState(null)
+  const [preparingCombinedReview, setPreparingCombinedReview] = useState(false)
+  const [selectedMenuDate, setSelectedMenuDate] = useState(() => toInputDate(new Date()))
   const categoryRefs = useRef({})
+  const packageOrders = normalizePackagePayloads(pendingPackageOrder)
+  const hasPendingPackageOrder = packageOrders.length > 0
+  const primaryPackageOrder = packageOrders[0]
+  const pendingPackageEntries = getPendingPackageEntries(packageOrders, mealTypes, weeklyPlan)
+  const packageCount = pendingPackageEntries.reduce((sum, line) => sum + (Number(line.qty) || 0), 0)
+  const packageTotal = pendingPackageEntries.reduce((sum, line) => sum + (Number(line.priceValue) || 0) * (Number(line.qty) || 0), 0)
+  const todayDate = new Date()
+  const activeMenuDate = primaryPackageOrder?.order_date || selectedMenuDate
+  const activeMenuDateObj = new Date(`${activeMenuDate}T00:00:00`)
+  const activeMenuDateLabel = Number.isNaN(activeMenuDateObj.getTime())
+    ? 'selected date'
+    : activeMenuDateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 
   useBodyScrollLock(showMobileCart)
 
@@ -1978,9 +4017,11 @@ function MenuItemsPanel({
 
   const cartEntries = Object.values(cart).filter((e) => e.qty > 0)
   const cartTotal = cartEntries.reduce((sum, e) => sum + Number(e.item.price) * e.qty, 0)
+  const combinedCartTotal = cartTotal + packageTotal
   const cartCount = cartEntries.reduce((sum, e) => sum + e.qty, 0)
+  const displayCartCount = cartCount + packageCount
   const menuOrderingOpen = isMenuItemOrderOpen()
-  const showFloatingCartBar = cartEntries.length > 0
+  const showFloatingCartBar = (cartEntries.length > 0 || hasPendingPackageOrder)
     && !selectedItem
     && !showOrderMethod
     && !showDelivery
@@ -1988,17 +4029,25 @@ function MenuItemsPanel({
     && !showMobileCart
   const orderButtonLabel = !menuOrderingOpen
     ? 'Orders open at 4:00 AM'
-    : cartEntries.length === 0
-      ? 'Add items to order'
-      : pendingPackageOrder
-        ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + pkg)`
+    : hasPendingPackageOrder && cartCount === 0
+      ? `Place Order (${packageCount} pkg)`
+      : cartEntries.length === 0
+        ? 'Add items to order'
+        : hasPendingPackageOrder
+        ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + ${packageCount} pkg)`
         : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`
+  const floatingCartLabel = hasPendingPackageOrder && cartCount > 0
+    ? `${packageCount} pkg + ${cartCount} item${cartCount > 1 ? 's' : ''}`
+    : hasPendingPackageOrder
+      ? `${packageCount} pkg`
+      : `${cartCount} item${cartCount > 1 ? 's' : ''}`
+  const floatingCartMeta = `Rs. ${combinedCartTotal.toFixed(2)}`
 
   useEffect(() => {
-    if (cartEntries.length === 0) {
+    if (cartEntries.length === 0 && !hasPendingPackageOrder) {
       setShowMobileCart(false)
     }
-  }, [cartEntries.length])
+  }, [cartEntries.length, hasPendingPackageOrder])
 
   useEffect(() => {
     onFloatingCartBarChange?.(showFloatingCartBar)
@@ -2023,6 +4072,48 @@ function MenuItemsPanel({
       ...prev,
       [item.id]: { item, qty: prev[item.id].qty + 1 },
     }))
+
+  const updatePendingPackageQuantity = (entry, delta) => {
+    if (!onPendingPackageOrderChange) return
+    if (delta < 0 && Number(entry?.qty || 0) <= 1) {
+      setPendingRemoveCartPackage(entry)
+      return
+    }
+    const next = normalizePackagePayloads(pendingPackageOrder).map((item) => ({ ...item }))
+    const targetIndex = next.findIndex((item) =>
+      Number(item?.meal_type) === Number(entry?.payload?.meal_type)
+      && String(item?.preference || '') === String(entry?.payload?.preference || '')
+      && String(item?.order_date || '') === String(entry?.payload?.order_date || '')
+    )
+    if (targetIndex === -1) return
+
+    const currentQty = Number(next[targetIndex]?.quantity || 1)
+    const nextQty = currentQty + delta
+    if (nextQty <= 0) {
+      next.splice(targetIndex, 1)
+    } else {
+      next[targetIndex].quantity = Math.min(MAX_PACKAGE_QUANTITY, nextQty)
+    }
+    onPendingPackageOrderChange(next.length > 0 ? next : null)
+  }
+
+  const confirmRemovePendingPackage = () => {
+    if (!pendingRemoveCartPackage) return
+    const next = normalizePackagePayloads(pendingPackageOrder)
+      .map((item) => ({ ...item }))
+      .filter((item) => !(
+        Number(item?.meal_type) === Number(pendingRemoveCartPackage?.payload?.meal_type)
+        && String(item?.preference || '') === String(pendingRemoveCartPackage?.payload?.preference || '')
+        && String(item?.order_date || '') === String(pendingRemoveCartPackage?.payload?.order_date || '')
+      ))
+    onPendingPackageOrderChange?.(next.length > 0 ? next : null)
+    setPendingRemoveCartPackage(null)
+  }
+
+  const clearPendingPackagesOnly = () => {
+    onPendingPackageOrderChange?.(null)
+    setShowClearMenuPackagesConfirm(false)
+  }
 
   const decreaseQty = (item) => {
     const current = cart[item.id]?.qty ?? 0
@@ -2076,16 +4167,16 @@ function MenuItemsPanel({
       return
     }
 
-    const checkoutMethod = pendingPackageOrder?.delivery_type || deliveryType
-    const checkoutPhone = pendingPackageOrder?.phone_number || phoneNumber
-    const checkoutDetails = pendingPackageOrder?.delivery_address || detailsText
-    const checkoutAddressLine1 = pendingPackageOrder?.address_line_1 || addressLine1
-    const checkoutAddressLine2 = pendingPackageOrder?.address_line_2 || addressLine2
-    const checkoutCityArea = pendingPackageOrder?.city_area || cityArea
-    const checkoutLocationSource = pendingPackageOrder?.location_source || locationSource
-    const checkoutLatitude = pendingPackageOrder?.delivery_latitude ?? deliveryLatitude
-    const checkoutLongitude = pendingPackageOrder?.delivery_longitude ?? deliveryLongitude
-    const inheritedOrderDate = pendingPackageOrder?.order_date || ''
+    const checkoutMethod = primaryPackageOrder?.delivery_type || deliveryType
+    const checkoutPhone = primaryPackageOrder?.phone_number || phoneNumber
+    const checkoutDetails = primaryPackageOrder?.delivery_address || detailsText
+    const checkoutAddressLine1 = primaryPackageOrder?.address_line_1 || addressLine1
+    const checkoutAddressLine2 = primaryPackageOrder?.address_line_2 || addressLine2
+    const checkoutCityArea = primaryPackageOrder?.city_area || cityArea
+    const checkoutLocationSource = primaryPackageOrder?.location_source || locationSource
+    const checkoutLatitude = primaryPackageOrder?.delivery_latitude ?? deliveryLatitude
+    const checkoutLongitude = primaryPackageOrder?.delivery_longitude ?? deliveryLongitude
+    const inheritedOrderDate = primaryPackageOrder?.order_date || ''
 
     setSubmitting(true)
     try {
@@ -2104,35 +4195,37 @@ function MenuItemsPanel({
           delivery_latitude: checkoutLatitude,
           delivery_longitude: checkoutLongitude,
         }
-        if (inheritedOrderDate) itemOrder.order_date = inheritedOrderDate
+        itemOrder.order_date = inheritedOrderDate || selectedMenuDate
         return itemOrder
       })
 
-      const allOrders = pendingPackageOrder ? [pendingPackageOrder, ...itemOrders] : itemOrders
+      const allOrders = hasPendingPackageOrder ? [...packageOrders, ...itemOrders] : itemOrders
       const { data: createdOrders = [] } = await placeMealOrdersBatch(allOrders)
       const firstCreatedOrder = Array.isArray(createdOrders) ? createdOrders[0] : null
       const deliveryFeeLabel = checkoutMethod === 'delivery'
-        ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, pendingPackageOrder ? 'Free' : 'Calculated at checkout')
+        ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, 'Calculated at checkout')
         : ''
       const itemSummaryLines = cartEntries.map(({ item, qty }) => ({
         name: item.name,
         qty,
       }))
-      const summaryLines = pendingPackageOrder
-        ? [getPackageSummaryLine(pendingPackageOrder, mealTypes), ...itemSummaryLines]
+      const summaryLines = hasPendingPackageOrder
+        ? [...getPackageSummaryLines(packageOrders, mealTypes), ...itemSummaryLines]
         : itemSummaryLines
-      const packageReadyText = pendingPackageOrder
-        ? getPackageReadyTextFromPayload(pendingPackageOrder, mealTypes)
+      const packageReadyText = hasPendingPackageOrder
+        ? getPackageReadyTextFromPayloads(packageOrders, mealTypes)
         : ''
 
       setSuccess('')
       setCart({})
-      if (pendingPackageOrder) onPackageOrderSent()
+      if (hasPendingPackageOrder) onPackageOrderSent()
       refetchOrders()
       onOrderSuccess?.({
         title: 'Order Placed Successfully',
-        message: pendingPackageOrder
-          ? `Your meal package and cafe items have been sent together. ${packageReadyText}.`
+        message: hasPendingPackageOrder
+          ? cartEntries.length > 0
+            ? `Your meal package and cafe items have been sent together. ${packageReadyText}`
+            : `Your meal package order has been sent. ${packageReadyText}`
           : 'Your menu item order has been sent to Cafe Lush.',
         method: checkoutMethod,
         deliveryAddress: checkoutMethod === 'delivery' ? checkoutDetails : '',
@@ -2141,6 +4234,7 @@ function MenuItemsPanel({
         deliveryFeeLabel,
         lines: summaryLines,
       })
+      setCombinedOrderReview(null)
       setShowOrderMethod(false)
       setShowDelivery(false)
       setShowTakeaway(false)
@@ -2153,11 +4247,87 @@ function MenuItemsPanel({
     }
   }
 
+  const openCombinedOrderReview = async () => {
+    if (!hasPendingPackageOrder || !primaryPackageOrder) return
+
+    const checkoutMethod = primaryPackageOrder.delivery_type
+    const checkoutPhone = primaryPackageOrder.phone_number || ''
+    const checkoutDetails = primaryPackageOrder.delivery_address || ''
+    const checkoutAddressLine1 = primaryPackageOrder.address_line_1 || ''
+    const checkoutAddressLine2 = primaryPackageOrder.address_line_2 || ''
+    const checkoutCityArea = primaryPackageOrder.city_area || ''
+    const checkoutLocationSource = primaryPackageOrder.location_source || 'address'
+    const checkoutLatitude = primaryPackageOrder.delivery_latitude ?? null
+    const checkoutLongitude = primaryPackageOrder.delivery_longitude ?? null
+
+      const packageLines = getPendingPackageEntries(packageOrders, mealTypes, weeklyPlan)
+      const itemLines = cartEntries.map(({ item, qty }) => ({
+        name: item.name,
+        qty,
+        subtotal: `Rs. ${(Number(item.price) * qty).toFixed(2)}`,
+    }))
+
+    let deliveryFeeLabel = ''
+    if (checkoutMethod === 'delivery') {
+      setPreparingCombinedReview(true)
+      try {
+        const { data } = await estimateDeliveryFee({
+          delivery_type: 'delivery',
+          has_package: false,
+          address_line_1: checkoutAddressLine1,
+          address_line_2: checkoutAddressLine2,
+          city_area: checkoutCityArea,
+          location_source: checkoutLocationSource,
+          delivery_latitude: checkoutLatitude,
+          delivery_longitude: checkoutLongitude,
+        })
+        deliveryFeeLabel = data?.delivery_fee_label || formatDeliveryFeeLabel(data?.delivery_fee, 'Calculated at checkout')
+      } catch (err) {
+        const message = err.response?.data?.detail || err.message || 'Failed to calculate the delivery fee.'
+        setError(message)
+        showToast(message, 'error')
+        setPreparingCombinedReview(false)
+        return
+      } finally {
+        setPreparingCombinedReview(false)
+      }
+    }
+
+    setCombinedOrderReview({
+      title: cartCount > 0
+        ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + ${packageCount} pkg)`
+        : `Place Order (${packageCount} pkg)`,
+      message: 'Review your meal packages, cafe items, and delivery details before placing the order.',
+      method: checkoutMethod,
+      deliveryAddress: checkoutMethod === 'delivery' ? checkoutDetails : '',
+      pickupDetails: checkoutMethod === 'takeaway' ? checkoutDetails : '',
+      phoneNumber: checkoutPhone,
+      deliveryFeeLabel,
+      packageLines,
+      itemLines,
+    })
+  }
+
+  const confirmCombinedOrder = async () => {
+    if (!primaryPackageOrder) return
+    await submitCartOrder({
+      deliveryType: primaryPackageOrder.delivery_type,
+      phoneNumber: primaryPackageOrder.phone_number,
+      detailsText: primaryPackageOrder.delivery_address || '',
+      addressLine1: primaryPackageOrder.address_line_1 || '',
+      addressLine2: primaryPackageOrder.address_line_2 || '',
+      cityArea: primaryPackageOrder.city_area || '',
+      locationSource: primaryPackageOrder.location_source || 'address',
+      deliveryLatitude: primaryPackageOrder.delivery_latitude ?? null,
+      deliveryLongitude: primaryPackageOrder.delivery_longitude ?? null,
+    })
+  }
+
   const handlePlaceOrder = async () => {
     setShowMobileCart(false)
     setError('')
     setSuccess('')
-    if (cartEntries.length === 0) {
+    if (cartEntries.length === 0 && !hasPendingPackageOrder) {
       setError('Your cart is empty.')
       return
     }
@@ -2166,12 +4336,8 @@ function MenuItemsPanel({
       return
     }
 
-    if (pendingPackageOrder) {
-      await submitCartOrder({
-        deliveryType: pendingPackageOrder.delivery_type,
-        phoneNumber: pendingPackageOrder.phone_number,
-        detailsText: pendingPackageOrder.delivery_address || '',
-      })
+    if (hasPendingPackageOrder) {
+      await openCombinedOrderReview()
       return
     }
 
@@ -2186,7 +4352,7 @@ function MenuItemsPanel({
   }
 
   const renderCartPanel = ({ mobile = false } = {}) => (
-    <div className={`sd-cart-inner${mobile ? ' sd-cart-inner-mobile' : ''}`}>
+      <div className={`sd-cart-inner${mobile ? ' sd-cart-inner-mobile' : ''}`}>
       <div className="sd-cart-header">
         <span className="sd-cart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <ShoppingCart size={18} strokeWidth={2.2} />
@@ -2194,7 +4360,7 @@ function MenuItemsPanel({
         </span>
 
         <div className="sd-cart-header-actions">
-          {cartCount > 0 && <span className="sd-cart-count">{cartCount}</span>}
+          {displayCartCount > 0 && <span className="sd-cart-count">{displayCartCount}</span>}
           {mobile && (
             <button
               type="button"
@@ -2209,7 +4375,7 @@ function MenuItemsPanel({
       </div>
 
       <div className="sd-cart-items">
-        {cartEntries.length === 0 ? (
+        {cartEntries.length === 0 && !hasPendingPackageOrder ? (
           <div className="sd-cart-empty">
             <span className="sd-cart-empty-icon" style={{ display: 'flex', justifyContent: 'center' }}>
               <ShoppingCart size={24} strokeWidth={2.2} />
@@ -2217,33 +4383,66 @@ function MenuItemsPanel({
             <p className="sd-cart-empty-text">No items added yet</p>
           </div>
         ) : (
-          cartEntries.map(({ item, qty }) => (
-            <div key={item.id} className="sd-cart-row">
-              <div className="sd-cart-row-info">
-                <p className="sd-cart-row-name">{item.name}</p>
-                <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
+          <>
+            {hasPendingPackageOrder && (
+              <div className="sd-cart-package-block">
+                <div className="sd-cart-section-label">Selected Packages</div>
+                {pendingPackageEntries.map((line) => (
+                  <div key={line.key} className="sd-cart-row package">
+                    <div className="sd-cart-row-info">
+                      <p className="sd-cart-row-name">{line.name}</p>
+                      <p className="sd-cart-row-subtotal">{line.date ? formatOrderSuccessDate(line.date) : 'Package selected'}</p>
+                      {line.unitPriceLabel && <p className="sd-cart-row-qty">{line.unitPriceLabel}</p>}
+                    </div>
+                    <div className="sd-cart-row-right">
+                      <div className="sd-cart-qty-controls">
+                        <button type="button" className="sd-cart-qty-btn" onClick={() => updatePendingPackageQuantity(line, -1)}>
+                          <Minus size={14} strokeWidth={2.4} />
+                        </button>
+                        <span className="sd-cart-qty-num">{line.qty}</span>
+                        <button type="button" className="sd-cart-qty-btn" onClick={() => updatePendingPackageQuantity(line, 1)}>
+                          <Plus size={14} strokeWidth={2.4} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="sd-cart-row-right">
-                <div className="sd-cart-qty-controls">
-                  <button type="button" className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
-                    <Minus size={14} strokeWidth={2.4} />
-                  </button>
-                  <span className="sd-cart-qty-num">{qty}</span>
-                  <button type="button" className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
-                    <Plus size={14} strokeWidth={2.4} />
-                  </button>
-                </div>
+            )}
+
+            {cartEntries.length > 0 && (
+              <div className="sd-cart-package-block">
+                {hasPendingPackageOrder && <div className="sd-cart-section-label">Cafe Items</div>}
+                {cartEntries.map(({ item, qty }) => (
+                  <div key={item.id} className="sd-cart-row">
+                    <div className="sd-cart-row-info">
+                      <p className="sd-cart-row-name">{item.name}</p>
+                      <p className="sd-cart-row-subtotal">Rs. {(Number(item.price) * qty).toFixed(2)}</p>
+                    </div>
+                    <div className="sd-cart-row-right">
+                      <div className="sd-cart-qty-controls">
+                        <button type="button" className="sd-cart-qty-btn" onClick={() => decreaseQty(item)}>
+                          <Minus size={14} strokeWidth={2.4} />
+                        </button>
+                        <span className="sd-cart-qty-num">{qty}</span>
+                        <button type="button" className="sd-cart-qty-btn" onClick={() => increaseQty(item)}>
+                          <Plus size={14} strokeWidth={2.4} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))
+            )}
+          </>
         )}
       </div>
 
       <div className="sd-cart-footer">
-        {cartEntries.length > 0 && (
+        {(cartEntries.length > 0 || hasPendingPackageOrder) && (
           <div className="sd-cart-total-row">
             <span className="sd-cart-total-label">Total</span>
-            <span className="sd-cart-total-val">Rs. {cartTotal.toFixed(2)}</span>
+            <span className="sd-cart-total-val">Rs. {combinedCartTotal.toFixed(2)}</span>
           </div>
         )}
         {error && <p className="sd-cart-feedback-error">{error}</p>}
@@ -2251,12 +4450,22 @@ function MenuItemsPanel({
         <button
           type="button"
           onClick={handlePlaceOrder}
-          disabled={submitting || cartEntries.length === 0}
-          className={`sd-cart-order-btn ${cartEntries.length > 0 ? 'ready' : 'empty'}`}
+          disabled={submitting || (cartEntries.length === 0 && !hasPendingPackageOrder) || preparingCombinedReview}
+          className={`sd-cart-order-btn ${(cartEntries.length > 0 || hasPendingPackageOrder) ? 'ready' : 'empty'}`}
         >
-          {submitting ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
+          {(submitting || preparingCombinedReview) ? <Spinner size="sm" /> : <HandPlatter size={16} strokeWidth={2.2} />}
           {orderButtonLabel}
         </button>
+        {hasPendingPackageOrder && (
+          <button
+            type="button"
+            className="sd-btn-secondary"
+            style={{ justifyContent: 'center' }}
+            onClick={() => setShowClearMenuPackagesConfirm(true)}
+          >
+            Clear Packages
+          </button>
+        )}
         {cartEntries.length > 0 && (
           <button
             type="button"
@@ -2277,7 +4486,7 @@ function MenuItemsPanel({
         <div className="sd-panel-header">
           <div>
             <h2 className="sd-panel-title">Menu Items</h2>
-            <p className="sd-panel-subtitle">Browse and add items to your cart</p>
+            <p className="sd-panel-subtitle">Browse menu items for {activeMenuDateLabel} and add them to your cart</p>
             <p className={menuOrderingOpen ? 'sd-input-hint' : 'sd-input-hint warning'}>
               {menuOrderingOpen
                 ? MENU_ITEM_ORDER_HOURS_MESSAGE
@@ -2287,7 +4496,7 @@ function MenuItemsPanel({
 
         </div>
 
-        {pendingPackageOrder && (
+        {hasPendingPackageOrder && (
           <div
             style={{
               background: '#f0fdf4',
@@ -2304,7 +4513,11 @@ function MenuItemsPanel({
           >
             <Package2 size={18} strokeWidth={2.2} />
             <span>
-              <strong>Meal package order is ready.</strong> Add menu items below and place the combined order with the same {pendingPackageOrder.delivery_type} details you already confirmed.
+              <strong>{packageOrders.length} meal package{packageOrders.length === 1 ? '' : 's'} ready.</strong>{' '}
+              Add menu items below and place the combined order with the same {primaryPackageOrder.delivery_type} details you already confirmed.
+              {primaryPackageOrder.delivery_type === 'delivery'
+                ? ' Standard delivery charges will apply once cafe items are added.'
+                : ''}
             </span>
           </div>
         )}
@@ -2433,9 +4646,9 @@ function MenuItemsPanel({
           <span className="sd-mobile-cart-bar-main">
             <span className="sd-mobile-cart-bar-title">
               <ShoppingCart size={16} strokeWidth={2.2} />
-              {cartCount} item{cartCount > 1 ? 's' : ''}
+              {floatingCartLabel}
             </span>
-            <span className="sd-mobile-cart-bar-total">Rs. {cartTotal.toFixed(2)}</span>
+            <span className="sd-mobile-cart-bar-total">{floatingCartMeta}</span>
           </span>
           <span className="sd-mobile-cart-bar-cta">Review Cart</span>
         </button>
@@ -2511,6 +4724,18 @@ function MenuItemsPanel({
         />
       )}
 
+      {combinedOrderReview && (
+        <CombinedOrderReviewModal
+          review={combinedOrderReview}
+          submitting={submitting}
+          onConfirm={confirmCombinedOrder}
+          onCancel={() => {
+            if (submitting) return
+            setCombinedOrderReview(null)
+          }}
+        />
+      )}
+
       {selectedItem && (
         <ItemDetailsModal
           item={selectedItem}
@@ -2553,6 +4778,28 @@ function MenuItemsPanel({
           cancelLabel={null}
           onConfirm={() => setShowShopClosedConfirm(false)}
           onCancel={() => setShowShopClosedConfirm(false)}
+        />
+      )}
+
+      {pendingRemoveCartPackage && (
+        <ConfirmDialog
+          title="Remove package?"
+          message={`Do you want to remove ${pendingRemoveCartPackage.name} from your cart?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemovePendingPackage}
+          onCancel={() => setPendingRemoveCartPackage(null)}
+        />
+      )}
+
+      {showClearMenuPackagesConfirm && (
+        <ConfirmDialog
+          title="Clear packages?"
+          message="Are you sure you want to remove all selected meal packages from this cart?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          onConfirm={clearPendingPackagesOnly}
+          onCancel={() => setShowClearMenuPackagesConfirm(false)}
         />
       )}
     </>
@@ -3916,29 +6163,37 @@ export default function StudentDashboard() {
   )
 
   const handlePackageReady = async (payload, addMenuItems) => {
+    const packagePayloads = normalizePackagePayloads(payload)
     if (addMenuItems) {
-      setPendingPackageOrder(payload)
+      if (!isMenuItemOrderOpen()) {
+        showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
+        return false
+      }
+      setPendingPackageOrder(packagePayloads)
       selectTab('menu')
+      return true
     } else {
       try {
-        const { data: createdOrders = [] } = await placeMealOrdersBatch([payload])
+        const { data: createdOrders = [] } = await placeMealOrdersBatch(packagePayloads)
         const firstCreatedOrder = Array.isArray(createdOrders) ? createdOrders[0] : null
-        const packageReadyText = getPackageReadyTextFromPayload(payload, mealTypes)
+        const packageReadyText = getPackageReadyTextFromPayloads(packagePayloads, mealTypes)
         refetchOrders()
         setOrderSuccess({
           title: 'Order Placed Successfully',
-          message: `Your meal package order has been sent to Cafe Lush. ${packageReadyText}.`,
-          method: payload.delivery_type,
-          deliveryAddress: payload.delivery_type === 'delivery' ? payload.delivery_address : '',
-          pickupDetails: payload.delivery_type === 'takeaway' ? payload.delivery_address : '',
-          phoneNumber: payload.phone_number,
-          deliveryFeeLabel: payload.delivery_type === 'delivery'
+          message: `Your meal package order has been sent to Cafe Lush. ${packageReadyText}`,
+          method: packagePayloads[0]?.delivery_type,
+          deliveryAddress: packagePayloads[0]?.delivery_type === 'delivery' ? packagePayloads[0]?.delivery_address : '',
+          pickupDetails: packagePayloads[0]?.delivery_type === 'takeaway' ? packagePayloads[0]?.delivery_address : '',
+          phoneNumber: packagePayloads[0]?.phone_number,
+          deliveryFeeLabel: packagePayloads[0]?.delivery_type === 'delivery'
             ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, 'Free')
             : '',
-          lines: [getPackageSummaryLine(payload, mealTypes)],
+          lines: getPackageSummaryLines(packagePayloads, mealTypes),
         })
+        return true
       } catch (err) {
         showToast(err.response?.data?.detail || 'Failed to place order.', 'error')
+        return false
       }
     }
   }
@@ -4165,12 +6420,12 @@ export default function StudentDashboard() {
 
         <main className="sd-content">
           {activeTab === 'packages' && (
-            <MealPackagesPanel
+            <MealPackagesViewerPanel
               mealTypes={mealTypes}
               loadingTypes={loadingTypes}
               onPackageReady={handlePackageReady}
               weeklyPlan={weeklyPlan}
-              refetchWeeklyPlan={fetchWeeklyPlan}
+              onOpenMenu={() => selectTab('menu')}
             />
           )}
 
@@ -4178,10 +6433,12 @@ export default function StudentDashboard() {
             <MenuItemsPanel
               refetchOrders={refetchOrders}
               pendingPackageOrder={pendingPackageOrder}
+              onPendingPackageOrderChange={setPendingPackageOrder}
               onPackageOrderSent={() => setPendingPackageOrder(null)}
               showToast={showToast}
               onOrderSuccess={setOrderSuccess}
               mealTypes={mealTypes}
+              weeklyPlan={weeklyPlan}
               onFloatingCartBarChange={setMobileMenuCartVisible}
             />
           )}

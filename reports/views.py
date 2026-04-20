@@ -129,6 +129,30 @@ class MonthlyReportView(APIView):
             .aggregate(total=Sum('total_amount'))['total'] or 0
         )
         pos_income = pos_income_terminal + pos_income_walkin
+        edited_walkin_qs = (
+            Bill.objects
+            .select_related('edited_by')
+            .filter(
+                source='walk_in',
+                generated_at__year=year,
+                generated_at__month=month,
+                edit_count__gt=0,
+            )
+            .order_by('-edited_at', '-generated_at')
+        )
+        edited_walkin_count = edited_walkin_qs.count()
+        edited_walkin_total = edited_walkin_qs.aggregate(total=Sum('total_amount'))['total'] or 0
+        edited_walkins = [{
+            'id': bill.id,
+            'bill_number': bill.bill_number,
+            'customer_name': bill.customer_name or 'Walk-in Customer',
+            'generated_at': bill.generated_at,
+            'edited_at': bill.edited_at,
+            'edited_by_name': bill.edited_by.username if bill.edited_by else '',
+            'edit_count': bill.edit_count,
+            'original_total_amount': bill.original_total_amount or bill.total_amount,
+            'current_total_amount': bill.total_amount,
+        } for bill in edited_walkin_qs]
 
         event_income = (
             Event.objects
@@ -163,6 +187,9 @@ class MonthlyReportView(APIView):
             'commissions_paid': commissions_paid,
             'manual_income':    manual_income,
             'manual_outcome':   manual_outcome,
+            'edited_walkin_count': edited_walkin_count,
+            'edited_walkin_total': edited_walkin_total,
+            'edited_walkins': edited_walkins,
             'net_profit':       net_profit,
         })
 

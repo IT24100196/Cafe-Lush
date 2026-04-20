@@ -101,7 +101,7 @@ class WeeklyMealPlan(models.Model):
 
 class FeaturedItem(models.Model):
     item     = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='featured')
-    position = models.PositiveSmallIntegerField(unique=True)  # 1–4
+    position = models.PositiveSmallIntegerField(unique=True)  # Public home page slots (currently 1-5)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -270,6 +270,7 @@ class MenuItemCheckoutTests(TestCase):
 
     def test_package_pickup_time_uses_fixed_meal_time_for_delivery_and_takeaway(self):
         breakfast, _ = MealType.objects.get_or_create(name='Breakfast', defaults={'cutoff_time': '08:00'})
+        lunch, _ = MealType.objects.get_or_create(name='Lunch', defaults={'cutoff_time': '10:00'})
         dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})
 
         breakfast_order = MealOrder(
@@ -278,6 +279,15 @@ class MenuItemCheckoutTests(TestCase):
             order_type='package',
             order_date=self.tomorrow,
             delivery_type='delivery',
+            quantity=1,
+            phone_number='0771234567',
+        )
+        lunch_order = MealOrder(
+            student=self.student,
+            meal_type=lunch,
+            order_type='package',
+            order_date=self.tomorrow,
+            delivery_type='takeaway',
             quantity=1,
             phone_number='0771234567',
         )
@@ -292,7 +302,96 @@ class MenuItemCheckoutTests(TestCase):
         )
 
         self.assertEqual(MealOrderSerializer(breakfast_order).data['pickup_time'], '07:30 AM')
+        self.assertEqual(MealOrderSerializer(lunch_order).data['pickup_time'], '12:30 PM')
         self.assertEqual(MealOrderSerializer(dinner_order).data['pickup_time'], '07:00 PM')
+
+    def test_batch_package_order_rejects_multiple_meal_slots_for_same_date(self):
+        breakfast, _ = MealType.objects.get_or_create(name='Breakfast', defaults={'cutoff_time': '08:00'})
+        dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})
+
+        response = self.client.post('/api/meals/orders/batch/', {
+            'orders': [
+                {
+                    'order_type': 'package',
+                    'meal_type': breakfast.id,
+                    'preference': 'veg',
+                    'order_date': str(self.tomorrow),
+                    'delivery_type': 'takeaway',
+                    'quantity': 1,
+                    'phone_number': '0771234567',
+                },
+                {
+                    'order_type': 'package',
+                    'meal_type': dinner.id,
+                    'preference': 'non-veg',
+                    'order_date': str(self.tomorrow),
+                    'delivery_type': 'takeaway',
+                    'quantity': 1,
+                    'phone_number': '0771234567',
+                },
+            ],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(MealOrder.objects.count(), 0)
+        self.assertEqual(
+            str(response.data['detail']),
+            'Meal package checkout can include only one meal slot at a time. Please choose Breakfast, Lunch, or Dinner only for the selected date.',
+        )
+
+    def test_batch_package_order_rejects_multiple_package_dates(self):
+        breakfast, _ = MealType.objects.get_or_create(name='Breakfast', defaults={'cutoff_time': '08:00'})
+
+        response = self.client.post('/api/meals/orders/batch/', {
+            'orders': [
+                {
+                    'order_type': 'package',
+                    'meal_type': breakfast.id,
+                    'preference': 'veg',
+                    'order_date': str(self.tomorrow),
+                    'delivery_type': 'takeaway',
+                    'quantity': 1,
+                    'phone_number': '0771234567',
+                },
+                {
+                    'order_type': 'package',
+                    'meal_type': breakfast.id,
+                    'preference': 'non-veg',
+                    'order_date': str(self.tomorrow + timedelta(days=1)),
+                    'delivery_type': 'takeaway',
+                    'quantity': 1,
+                    'phone_number': '0771234567',
+                },
+            ],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(MealOrder.objects.count(), 0)
+        self.assertEqual(
+            str(response.data['detail']),
+            'Meal package checkout can include only one meal date at a time. Please choose packages for the same date only.',
+        )
+
+    def test_lunch_package_order_rejects_after_same_day_8am_cutoff(self):
+        lunch, _ = MealType.objects.get_or_create(name='Lunch', defaults={'cutoff_time': '08:00'})
+
+        with patch('meals.views.timezone.now', return_value=self._local_datetime_at(8, 1)):
+            response = self.client.post('/api/meals/orders/', {
+                'order_type': 'package',
+                'meal_type': lunch.id,
+                'preference': 'non-veg',
+                'order_date': str(timezone.localdate()),
+                'delivery_type': 'takeaway',
+                'quantity': 1,
+                'phone_number': '0771234567',
+            }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(MealOrder.objects.count(), 0)
+        self.assertEqual(
+            str(response.data['detail']),
+            f'Order cutoff for {lunch.name} has passed. You must order before 08:00 AM on {timezone.localdate().strftime("%b %d")}.',
+        )
 
     def test_batch_package_order_rejects_dates_more_than_three_days_ahead(self):
         dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})
