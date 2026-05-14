@@ -2,8 +2,27 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import HttpResponse, JsonResponse
+
+
+def root_healthcheck(request):
+    return JsonResponse({
+        'status': 'ok',
+        'service': 'Cafe-Lush API',
+    })
+
+
+def robots_txt(request):
+    return HttpResponse('User-agent: *\nDisallow:\n', content_type='text/plain')
+
+
+def favicon(request):
+    return HttpResponse(status=204)
 
 urlpatterns = [
+    path('', root_healthcheck),
+    path('robots.txt', robots_txt),
+    path('favicon.ico', favicon),
     path('admin/', admin.site.urls),
     path('api/auth/',     include('authentication.urls')),
     path('api/meals/',    include('meals.urls')),
