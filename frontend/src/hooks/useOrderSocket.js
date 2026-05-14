@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000'
+const DEFAULT_WS_BASE = import.meta.env.DEV
+  ? 'ws://127.0.0.1:8000'
+  : 'wss://api.shanthacafelush.com'
+
+const WS_BASE = import.meta.env.VITE_WS_URL || DEFAULT_WS_BASE
 const RECONNECT_DELAY = 3000
 
 /**
