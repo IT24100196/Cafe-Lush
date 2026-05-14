@@ -2,7 +2,9 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.core import mail
 from django.test import TestCase
+from django.test.utils import override_settings
 from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -538,7 +540,17 @@ class MenuItemCheckoutTests(TestCase):
             'All orders in the same checkout must use the same order method.',
         )
 
-    def test_package_and_item_delivery_stays_fee_free(self):
+    @patch('meals.views.calculate_delivery_quote')
+    def test_package_and_item_delivery_fee_is_added_to_bill(self, mock_calculate_delivery_quote):
+        mock_calculate_delivery_quote.return_value = {
+            'delivery_fee': Decimal('150.00'),
+            'distance_km': Decimal('3.20'),
+            'label': 'LKR 150',
+            'latitude': Decimal('9.700000'),
+            'longitude': Decimal('80.040000'),
+            'location_source': 'address',
+        }
+
         dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})
         WeeklyMealPlan.objects.create(
             day_of_week=self.tomorrow.weekday(),
@@ -579,7 +591,7 @@ class MenuItemCheckoutTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(MealOrder.objects.count(), 2)
-        self.assertEqual(MealOrder.objects.filter(delivery_fee=Decimal('0.00')).count(), 2)
+        self.assertEqual(MealOrder.objects.filter(delivery_fee=Decimal('150.00')).count(), 2)
 
         first_order = MealOrder.objects.order_by('id').first()
         self.client.force_authenticate(user=self.cashier)
@@ -587,13 +599,13 @@ class MenuItemCheckoutTests(TestCase):
 
         self.assertEqual(bill_response.status_code, 201)
         bill = Bill.objects.get()
-        self.assertEqual(bill.delivery_fee, Decimal('0.00'))
+        self.assertEqual(bill.delivery_fee, Decimal('150.00'))
         self.assertEqual(bill.subtotal_amount, Decimal('700.00'))
-        self.assertEqual(bill.total_amount, Decimal('700.00'))
+        self.assertEqual(bill.total_amount, Decimal('850.00'))
 
         online_orders_response = self.client.get('/api/meals/online-orders/')
         self.assertEqual(online_orders_response.status_code, 200)
-        self.assertEqual(online_orders_response.data[0]['delivery_fee'], '0.00')
+        self.assertEqual(online_orders_response.data[0]['delivery_fee'], '150.00')
 
     @patch('meals.views.calculate_delivery_quote')
     def test_menu_item_address_delivery_fee_is_added_to_bill(self, mock_calculate_delivery_quote):
@@ -648,3 +660,196 @@ class MenuItemCheckoutTests(TestCase):
         self.assertIn('Rs.200.00', html)
         self.assertIn('Rs.1700.00', html)
         self.assertIn('Rs.1900.00', html)
+
+
+@override_settings(
+    EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
+    OWNER_ORDER_EMAIL='shanthaenterprise2026@gmail.com',
+    OWNER_ORDER_EMAIL_ASYNC=False,
+)
+class OwnerOrderEmailTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        student_role, _ = Role.objects.get_or_create(name=Role.STUDENT)
+        self.user = User.objects.create_user(
+            username='owner-email-student',
+            password='StudentPass123!',
+            role=student_role,
+            email='student@example.com',
+        )
+        self.student = Student.objects.create(
+            user=self.user,
+            student_code='STU-2001',
+            full_name='Student Example',
+            contact='0771234567',
+        )
+        category = Category.objects.create(name='Meals')
+        self.item_one = Item.objects.create(
+            category=category,
+            name='Chicken Kottu',
+            price='850.00',
+            is_available=True,
+        )
+        self.item_two = Item.objects.create(
+            category=category,
+            name='Egg Appam',
+            price='200.00',
+            is_available=True,
+        )
+        self.dinner, _ = MealType.objects.get_or_create(name='Dinner', defaults={'cutoff_time': '23:00'})
+        WeeklyMealPlan.objects.create(
+            day_of_week=(timezone.localdate() + timedelta(days=1)).weekday(),
+            meal_time='dinner',
+            meal_category='veg',
+            dishes=['Rice', 'Curry'],
+            price='300.00',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.tomorrow = timezone.localdate() + timedelta(days=1)
+
+    def _local_datetime_at(self, hour, minute=0):
+        return timezone.make_aware(
+            datetime.combine(timezone.localdate(), time(hour, minute)),
+            timezone.get_current_timezone(),
+        )
+
+    def _html_body(self):
+        message = mail.outbox[0]
+        alternative = message.alternatives[0]
+        return alternative[0] if isinstance(alternative, tuple) else alternative.content
+
+    @patch('meals.views.calculate_delivery_quote')
+    def test_single_menu_item_order_sends_owner_email(self, mock_calculate_delivery_quote):
+        mock_calculate_delivery_quote.return_value = {
+            'delivery_fee': Decimal('120.00'),
+            'distance_km': Decimal('2.50'),
+            'label': 'LKR 120',
+            'latitude': Decimal('9.700000'),
+            'longitude': Decimal('80.040000'),
+            'location_source': 'address',
+        }
+
+        with self.captureOnCommitCallbacks(execute=True):
+            with patch('meals.views.timezone.now', return_value=self._local_datetime_at(10, 0)):
+                response = self.client.post('/api/meals/orders/', {
+                    'order_type': 'item',
+                    'item': self.item_one.id,
+                    'quantity': 1,
+                    'delivery_type': 'delivery',
+                    'phone_number': '0771234567',
+                    'address_line_1': 'No 1, Main Street',
+                    'city_area': 'Jaffna',
+                    'location_source': 'address',
+                }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['shanthaenterprise2026@gmail.com'])
+        self.assertIn('New Student Order -', mail.outbox[0].subject)
+
+        html = self._html_body()
+        self.assertIn('Student Example', html)
+        self.assertIn('Chicken Kottu', html)
+        self.assertIn('Menu Item', html)
+        self.assertIn('Checkout ID:', html)
+        self.assertNotIn('Session ID:', html)
+        self.assertIn('Delivery Address: No 1, Main Street, Jaffna', html)
+        self.assertIn('Rs.850.00', html)
+        self.assertIn('Rs.120.00', html)
+        self.assertIn('Rs.970.00', html)
+
+    @patch('meals.views.calculate_delivery_quote')
+    def test_package_order_sends_owner_email(self, mock_calculate_delivery_quote):
+        mock_calculate_delivery_quote.return_value = {
+            'delivery_fee': Decimal('100.00'),
+            'distance_km': Decimal('1.80'),
+            'label': 'LKR 100',
+            'latitude': Decimal('9.710000'),
+            'longitude': Decimal('80.050000'),
+            'location_source': 'address',
+        }
+
+        with self.captureOnCommitCallbacks(execute=True):
+            with patch('meals.views.timezone.now', return_value=self._local_datetime_at(10, 0)):
+                response = self.client.post('/api/meals/orders/batch/', {
+                    'orders': [
+                        {
+                            'order_type': 'package',
+                            'meal_type': self.dinner.id,
+                            'preference': 'veg',
+                            'order_date': str(self.tomorrow),
+                            'delivery_type': 'delivery',
+                            'quantity': 1,
+                            'phone_number': '0771234567',
+                            'address_line_1': 'No 5, Temple Road',
+                            'city_area': 'Jaffna',
+                        },
+                    ],
+                }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(mail.outbox), 1)
+
+        html = self._html_body()
+        self.assertIn('Meal Package', html)
+        self.assertIn('Veg Dinner', html)
+        self.assertIn('Ready at 07:00 PM', html)
+        self.assertIn('No 5, Temple Road, Jaffna', html)
+        self.assertIn('Rs.300.00', html)
+        self.assertIn('Rs.100.00', html)
+        self.assertIn('Rs.400.00', html)
+
+    @patch('meals.views.calculate_delivery_quote')
+    def test_combined_package_and_menu_item_order_sends_one_email(self, mock_calculate_delivery_quote):
+        mock_calculate_delivery_quote.return_value = {
+            'delivery_fee': Decimal('150.00'),
+            'distance_km': Decimal('3.20'),
+            'label': 'LKR 150',
+            'latitude': Decimal('9.720000'),
+            'longitude': Decimal('80.060000'),
+            'location_source': 'address',
+        }
+
+        with self.captureOnCommitCallbacks(execute=True):
+            with patch('meals.views.timezone.now', return_value=self._local_datetime_at(10, 0)):
+                response = self.client.post('/api/meals/orders/batch/', {
+                    'orders': [
+                        {
+                            'order_type': 'package',
+                            'meal_type': self.dinner.id,
+                            'preference': 'veg',
+                            'order_date': str(self.tomorrow),
+                            'delivery_type': 'delivery',
+                            'quantity': 1,
+                            'phone_number': '0771234567',
+                            'address_line_1': 'No 8, Lake Road',
+                            'address_line_2': 'Hostel Block A',
+                            'city_area': 'Jaffna',
+                        },
+                        {
+                            'order_type': 'item',
+                            'item': self.item_two.id,
+                            'quantity': 2,
+                            'order_date': str(self.tomorrow),
+                            'delivery_type': 'delivery',
+                            'phone_number': '0771234567',
+                            'address_line_1': 'No 8, Lake Road',
+                            'address_line_2': 'Hostel Block A',
+                            'city_area': 'Jaffna',
+                        },
+                    ],
+                }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(mail.outbox), 1)
+
+        html = self._html_body()
+        self.assertIn('Meal Package + Menu Items', html)
+        self.assertIn('Veg Dinner', html)
+        self.assertIn('Egg Appam', html)
+        self.assertIn('No 8, Lake Road, Hostel Block A, Jaffna', html)
+        self.assertIn('>300.00<', html)
+        self.assertIn('>400.00<', html)
+        self.assertIn('Rs.150.00', html)
+        self.assertIn('Rs.850.00', html)
