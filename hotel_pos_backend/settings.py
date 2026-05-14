@@ -17,6 +17,10 @@ def _env_bool(name, default=False):
 
     raise ValueError(f'Invalid truth value for {name}: {value}')
 
+
+def _clean_setting(value):
+    return str(value or '').strip().strip('"').strip("'")
+
 SECRET_KEY    = config('SECRET_KEY')
 DEBUG         = _env_bool('DEBUG', default=False)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost', cast=Csv())
@@ -164,7 +168,14 @@ GEOCODER_USER_AGENT  = config('GEOCODER_USER_AGENT', default='CafeLushDelivery/1
 NOMINATIM_BASE_URL   = config('NOMINATIM_BASE_URL', default='https://nominatim.openstreetmap.org/search')
 
 # ── Email (SMTP) ──────────────────────────────────────────────────────────────
-EMAIL_BACKEND       = config('EMAIL_BACKEND',       default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_PROVIDER      = _clean_setting(config('EMAIL_PROVIDER',      default='smtp')).lower() or 'smtp'
+EMAIL_BACKEND       = _clean_setting(config('EMAIL_BACKEND',       default=''))
+if not EMAIL_BACKEND:
+    EMAIL_BACKEND = (
+        'hotel_pos_backend.email_backends.ResendEmailBackend'
+        if EMAIL_PROVIDER == 'resend'
+        else 'django.core.mail.backends.smtp.EmailBackend'
+    )
 EMAIL_HOST          = config('EMAIL_HOST',          default='smtp.gmail.com')
 EMAIL_PORT          = config('EMAIL_PORT',          default=587, cast=int)
 EMAIL_USE_TLS       = _env_bool('EMAIL_USE_TLS',    default=True)
@@ -172,7 +183,6 @@ EMAIL_HOST_USER     = config('EMAIL_HOST_USER',     default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 EMAIL_TIMEOUT       = config('EMAIL_TIMEOUT',       default=10, cast=int)
 DEFAULT_FROM_EMAIL  = config('DEFAULT_FROM_EMAIL',  default='Cafe Lush <noreply@cafelush.com>')
-EMAIL_PROVIDER      = config('EMAIL_PROVIDER',      default='smtp')
 RESEND_API_KEY      = config('RESEND_API_KEY',      default='')
 RESEND_API_URL      = config('RESEND_API_URL',      default='https://api.resend.com/emails')
 OWNER_ORDER_EMAIL   = config('OWNER_ORDER_EMAIL',   default=EMAIL_HOST_USER)
