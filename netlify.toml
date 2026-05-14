@@ -5,12 +5,12 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://cafe-lush-production.up.railway.app/api/:splat"
+  to = "https://api.shanthacafelush.com/api/:splat"
   status = 200
 
 [[redirects]]
   from = "/media/*"
-  to = "https://cafe-lush-production.up.railway.app/media/:splat"
+  to = "https://api.shanthacafelush.com/media/:splat"
   status = 200
 
 [[redirects]]

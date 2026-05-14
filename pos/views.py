@@ -7,10 +7,14 @@ from django.db.models.functions import Substr
 from django.utils import timezone
 
 from authentication.permissions import IsAdmin, IsCashier, IsAdminOrCashier
-from .models import Category, Item, PosOrder, PosOrderItem, FeaturedItem, WeeklyMealPlan
+from .models import (
+    Category, CatalogCategory, MenuGroup, MenuItem, ItemVariant,
+    Item, PosOrder, PosOrderItem, FeaturedItem, WeeklyMealPlan,
+)
 from meals.models import Bill
 from .serializers import (
-    CategorySerializer, ItemSerializer,
+    CategorySerializer, CatalogCategorySerializer, MenuGroupSerializer, MenuItemSerializer, ItemVariantSerializer,
+    ItemSerializer,
     CreatePosOrderSerializer, PosOrderSerializer,
     FeaturedItemSerializer, WeeklyMealPlanSerializer,
 )
@@ -64,6 +68,138 @@ class ItemViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         return {**super().get_serializer_context(), 'request': self.request}
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+
+class CatalogCategoryViewSet(viewsets.ModelViewSet):
+    serializer_class = CatalogCategorySerializer
+
+    def get_queryset(self):
+        return (
+            CatalogCategory.objects
+            .annotate(
+                menu_group_count=Count('menu_groups', distinct=True),
+                item_count=Count('menu_groups__items', distinct=True),
+            )
+            .order_by('sort_order', 'name', 'id')
+        )
+
+    def get_permissions(self):
+        return [IsAdmin()]
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+
+class MenuGroupViewSet(viewsets.ModelViewSet):
+    serializer_class = MenuGroupSerializer
+
+    def get_queryset(self):
+        queryset = (
+            MenuGroup.objects
+            .select_related('category')
+            .annotate(item_count=Count('items', distinct=True))
+            .order_by('sort_order', 'name', 'id')
+        )
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        return queryset
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsAdminOrCashier()]
+        return [IsAdmin()]
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+
+class MenuItemViewSet(viewsets.ModelViewSet):
+    serializer_class = MenuItemSerializer
+
+    def get_queryset(self):
+        queryset = (
+            MenuItem.objects
+            .select_related('menu_group', 'menu_group__category')
+            .prefetch_related('variants')
+            .annotate(variant_count=Count('variants', distinct=True))
+            .annotate(
+                missing_item_code=Case(
+                    When(item_id='', then=Value(1)),
+                    default=Value(0),
+                    output_field=IntegerField(),
+                ),
+                item_code_group=Substr('item_id', 4),
+                item_code_number=Substr('item_id', 1, 3),
+            )
+            .order_by('missing_item_code', 'item_code_group', 'item_code_number', 'name', 'id')
+        )
+        menu_group_id = self.request.query_params.get('menu_group')
+        category_id = self.request.query_params.get('category')
+        if menu_group_id:
+            queryset = queryset.filter(menu_group_id=menu_group_id)
+        if category_id:
+            queryset = queryset.filter(menu_group__category_id=category_id)
+        return queryset
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsAdminOrCashier()]
+        return [IsAdmin()]
+
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), 'request': self.request}
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+
+class ItemVariantViewSet(viewsets.ModelViewSet):
+    serializer_class = ItemVariantSerializer
+
+    def get_queryset(self):
+        queryset = (
+            ItemVariant.objects
+            .select_related('item', 'item__menu_group', 'item__menu_group__category')
+            .annotate(
+                auto_order=Case(
+                    When(name__iexact='Standard', then=Value(10)),
+                    When(name__iexact='Regular', then=Value(10)),
+                    When(name__iexact='Plain', then=Value(10)),
+                    When(name__iexact='Single', then=Value(10)),
+                    When(name__iexact='Small', then=Value(10)),
+                    When(name__iexact='With Cheese', then=Value(20)),
+                    When(name__iexact='Double', then=Value(20)),
+                    When(name__iexact='Big', then=Value(20)),
+                    When(name__iexact='With Ice', then=Value(20)),
+                    When(name__iexact='With Nuts', then=Value(30)),
+                    When(name__iexact='With Fruit/Nuts', then=Value(30)),
+                    default=Value(999),
+                    output_field=IntegerField(),
+                ),
+            )
+            .order_by('item_id', 'auto_order', 'name', 'id')
+        )
+        item_id = self.request.query_params.get('item')
+        menu_group_id = self.request.query_params.get('menu_group')
+        category_id = self.request.query_params.get('category')
+        if item_id:
+            queryset = queryset.filter(item_id=item_id)
+        if menu_group_id:
+            queryset = queryset.filter(item__menu_group_id=menu_group_id)
+        if category_id:
+            queryset = queryset.filter(item__menu_group__category_id=category_id)
+        return queryset
+
+    def get_permissions(self):
+        return [IsAdmin()]
 
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True

@@ -1,11 +1,89 @@
 from rest_framework import serializers
-from .models import Category, Item, PosOrder, PosOrderItem, FeaturedItem, WeeklyMealPlan
+from .models import (
+    Category, CatalogCategory, MenuGroup, MenuItem, ItemVariant,
+    Item, PosOrder, PosOrderItem, FeaturedItem, WeeklyMealPlan,
+)
 
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model  = Category
         fields = '__all__'
+
+
+class CatalogCategorySerializer(serializers.ModelSerializer):
+    menu_group_count = serializers.SerializerMethodField()
+    item_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CatalogCategory
+        fields = ['id', 'name', 'is_active', 'menu_group_count', 'item_count']
+
+    def get_menu_group_count(self, obj):
+        return getattr(obj, 'menu_group_count', obj.menu_groups.count())
+
+    def get_item_count(self, obj):
+        return getattr(obj, 'item_count', MenuItem.objects.filter(menu_group__category=obj).count())
+
+
+class MenuGroupSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    item_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MenuGroup
+        fields = [
+            'id', 'category', 'category_name', 'name', 'description',
+            'is_active', 'item_count',
+        ]
+
+    def get_item_count(self, obj):
+        return getattr(obj, 'item_count', obj.items.count())
+
+
+class ItemVariantSerializer(serializers.ModelSerializer):
+    item_name = serializers.CharField(source='item.name', read_only=True)
+
+    class Meta:
+        model = ItemVariant
+        fields = ['id', 'item', 'item_name', 'name', 'price', 'is_active', 'created_at']
+
+    def validate_price(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Price must be greater than 0.')
+        return value
+
+
+class MenuItemSerializer(serializers.ModelSerializer):
+    menu_group_name = serializers.CharField(source='menu_group.name', read_only=True)
+    category = serializers.IntegerField(source='menu_group.category_id', read_only=True)
+    category_name = serializers.CharField(source='menu_group.category.name', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    variant_count = serializers.SerializerMethodField()
+    variants = ItemVariantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MenuItem
+        fields = [
+            'id', 'menu_group', 'menu_group_name', 'category', 'category_name',
+            'item_id', 'name', 'price', 'image', 'image_url', 'is_available',
+            'variant_count', 'variants', 'created_at',
+        ]
+        extra_kwargs = {'image': {'required': False, 'allow_null': True}}
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+
+    def get_variant_count(self, obj):
+        return getattr(obj, 'variant_count', obj.variants.count())
+
+    def validate_price(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError('Price must be greater than 0.')
+        return value
 
 
 class ItemSerializer(serializers.ModelSerializer):

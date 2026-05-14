@@ -72,6 +72,9 @@ export async function logout() {
   } catch {
     // Proceed with local cleanup even if server call fails
   } finally {
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('student_cart_draft_'))
+      .forEach((key) => localStorage.removeItem(key))
     localStorage.removeItem('access')
     localStorage.removeItem('refresh')
     localStorage.removeItem('user')

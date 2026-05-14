@@ -410,6 +410,33 @@
   color: var(--caramel);
 }
 
+.cd-item-card.has-variants {
+  cursor: default;
+}
+
+.cd-item-actions {
+  margin-top: 8px;
+}
+
+.cd-item-view-btn {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-soft);
+  background: rgba(126, 200, 122, 0.06);
+  color: var(--forest);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.cd-item-view-btn:hover {
+  border-color: var(--sage);
+  background: rgba(126, 200, 122, 0.14);
+}
+
 @media (hover: hover) and (pointer: fine) {
   .cd-item-card::before {
     content: '';
@@ -756,6 +783,144 @@
   cursor: pointer;
   transition: all 0.2s ease;
   letter-spacing: 0.3px;
+}
+
+.cd-variant-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  background: rgba(18, 12, 8, 0.48);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+}
+
+.cd-variant-modal {
+  width: min(560px, 100%);
+  max-height: min(82vh, 720px);
+  overflow: hidden;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #fffdf8 0%, #fff8ef 100%);
+  box-shadow: 0 32px 90px rgba(28, 19, 12, 0.28);
+  border: 1px solid rgba(201, 168, 76, 0.2);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.cd-variant-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.cd-variant-eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--forest-light);
+  margin-bottom: 6px;
+}
+
+.cd-variant-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--espresso);
+}
+
+.cd-variant-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.cd-variant-close {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--espresso);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cd-variant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.cd-variant-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 14px 16px;
+}
+
+.cd-variant-info {
+  min-width: 0;
+}
+
+.cd-variant-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--espresso);
+}
+
+.cd-variant-price {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--caramel);
+}
+
+.cd-variant-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cd-variant-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(126, 200, 122, 0.24);
+  background: rgba(126, 200, 122, 0.08);
+  color: var(--forest);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cd-variant-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cd-variant-qty {
+  min-width: 20px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--espresso);
 }
 
 .cd-btn-create:hover:not(:disabled) {

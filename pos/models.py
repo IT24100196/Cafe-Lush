@@ -14,6 +14,86 @@ class Category(models.Model):
         return self.name
 
 
+class CatalogCategory(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'catalog_categories'
+        ordering = ['sort_order', 'name', 'id']
+
+    def __str__(self):
+        return self.name
+
+
+class MenuGroup(models.Model):
+    category = models.ForeignKey(CatalogCategory, on_delete=models.CASCADE, related_name='menu_groups')
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'menu_groups'
+        ordering = ['sort_order', 'name', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['category', 'name'], name='uniq_menu_group_per_catalog_category'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class MenuItem(models.Model):
+    menu_group = models.ForeignKey(MenuGroup, on_delete=models.CASCADE, related_name='items')
+    item_id = models.CharField(max_length=50)
+    name = models.CharField(max_length=150)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    image = models.ImageField(upload_to='items/', null=True, blank=True)
+    is_available = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'menu_items'
+        ordering = ['item_id', 'name', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['item_id'], name='uniq_menu_item_code'),
+            models.UniqueConstraint(fields=['menu_group', 'name'], name='uniq_menu_item_name_per_group'),
+        ]
+        indexes = [
+            models.Index(fields=['menu_group']),
+            models.Index(fields=['is_available']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class ItemVariant(models.Model):
+    item = models.ForeignKey(MenuItem, on_delete=models.CASCADE, related_name='variants')
+    name = models.CharField(max_length=100)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'item_variants'
+        ordering = ['sort_order', 'name', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['item', 'name'], name='uniq_variant_name_per_item'),
+        ]
+        indexes = [
+            models.Index(fields=['item']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f'{self.item.name} - {self.name}'
+
+
 class Item(models.Model):
     item_id      = models.CharField(max_length=50, blank=True, default='')
     category     = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='items')

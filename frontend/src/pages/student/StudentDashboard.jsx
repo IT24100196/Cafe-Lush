@@ -6,6 +6,7 @@ import {
   ChefHat,
   Clock3,
   Coffee,
+  CalendarDays,
   Facebook,
   HandPlatter,
   History,
@@ -140,6 +141,241 @@ function normalizeCategoryLabel(value) {
     .trim()
 }
 
+function normalizeMenuCategorySource(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const ORDER_SECTION_IDS = {
+  all: 'student-ordering-top',
+  mealPackages: 'student-ordering-meal-packages',
+}
+
+const MENU_CATEGORY_GROUPS = [
+  { key: 'vege-food', label: '🥬 Vege Food' },
+  { key: 'non-veg-food', label: '🍗 Non Veg Food' },
+  { key: 'shanthas-daily', label: "⭐ Shantha's Daily" },
+  { key: 'soups', label: '🥣 Soups' },
+  { key: 'sandwiches', label: '🥪 Sandwiches' },
+  { key: 'appam', label: '🍳 Appam' },
+  { key: 'salads', label: '🥗 Salads' },
+  { key: 'light-meals', label: '🍽 Light Meals' },
+  { key: 'snacks', label: '🍟 Snacks' },
+  { key: 'hot-drinks', label: '☕ Hot Drinks' },
+  { key: 'cold-drinks', label: '🥤 Cold Drinks' },
+  { key: 'ice-cream', label: '🍦 Ice Cream' },
+  { key: 'desserts', label: '🍰 Desserts' },
+]
+
+const ORDER_SHORTCUTS = [
+  { key: 'all', label: '✨ All' },
+  { key: 'meal-packages', label: '🍱 Meal Packages' },
+  ...MENU_CATEGORY_GROUPS.map((group) => ({
+    key: group.key,
+    label: group.label,
+  })),
+]
+
+function getMenuGroupKey(categoryName) {
+  const normalized = normalizeMenuCategorySource(categoryName)
+
+  if (normalized.startsWith('vege food')) return 'vege-food'
+  if (normalized.startsWith('non veg food')) return 'non-veg-food'
+  if (normalized.startsWith('shantha s special daily')) return 'shanthas-daily'
+  if (normalized.startsWith('veg soup') || normalized.startsWith('non veg soup')) return 'soups'
+  if (normalized.startsWith('sandwich') || normalized.startsWith('veg bread tost')) return 'sandwiches'
+  if (normalized.startsWith('egg appam')) return 'appam'
+  if (normalized.startsWith('salads')) return 'salads'
+  if (normalized.startsWith('light meals')) return 'light-meals'
+  if (normalized.startsWith('healthy snacks') || normalized.startsWith('quick bites')) return 'snacks'
+  if (normalized.startsWith('hot blend')) return 'hot-drinks'
+  if (
+    normalized.startsWith('natural coolers')
+    || normalized.startsWith('cold blend')
+    || normalized.startsWith('boba coolers')
+    || normalized.startsWith('shacks')
+  ) return 'cold-drinks'
+  if (normalized.startsWith('ice cream')) return 'ice-cream'
+  if (normalized.startsWith('gel dessert') || normalized.startsWith('honecomb cake')) return 'desserts'
+
+  return ''
+}
+
+const BASE_ORDER_SHORTCUTS = [
+  { key: 'all', label: '✨ All' },
+  { key: 'meal-packages', label: '🍱 Meal Packages' },
+]
+
+function getStudentMenuGroupEmoji(menuGroupName, categoryName = '') {
+  const normalized = normalizeMenuCategorySource(`${menuGroupName} ${categoryName}`)
+
+  if (normalized.includes('veg')) return '🥬'
+  if (normalized.includes('non veg')) return '🍗'
+  if (normalized.includes('daily special') || normalized.includes('special')) return '⭐'
+  if (normalized.includes('soup')) return '🥣'
+  if (normalized.includes('sandwich') || normalized.includes('toast')) return '🥪'
+  if (normalized.includes('appam')) return '🍳'
+  if (normalized.includes('salad')) return '🥗'
+  if (normalized.includes('light meal')) return '🍽️'
+  if (normalized.includes('snack') || normalized.includes('quick bite')) return '🍟'
+  if (normalized.includes('hot blend') || normalized.includes('hot drink')) return '☕'
+  if (
+    normalized.includes('natural cooler')
+    || normalized.includes('cold blend')
+    || normalized.includes('boba')
+    || normalized.includes('cooler')
+    || normalized.includes('shake')
+  ) return '🥤'
+  if (normalized.includes('ice cream')) return '🍦'
+  if (normalized.includes('waffle')) return '🧇'
+  if (normalized.includes('dessert') || normalized.includes('cake')) return '🍰'
+  if (normalized.includes('drink')) return '🥤'
+  return '🍽️'
+}
+
+function getStudentMenuSectionKey(itemOrName) {
+  const base = typeof itemOrName === 'string'
+    ? itemOrName
+    : (itemOrName?.menu_group_name || itemOrName?.category_name || 'Menu Items')
+  const normalized = normalizeMenuCategorySource(base).replace(/\s+/g, '-')
+  return `menu-group-${normalized || 'menu-items'}`
+}
+
+function getStudentMenuSectionLabel(item) {
+  const groupName = item?.menu_group_name || item?.category_name || 'Menu Items'
+  return `${getStudentMenuGroupEmoji(groupName, item?.category_name)} ${groupName}`
+}
+
+function getStudentItemActiveVariants(item) {
+  return (item?.variants || []).filter((variant) => variant?.is_active !== false)
+}
+
+function hasStudentVariantChoices(item) {
+  return getStudentItemActiveVariants(item).length > 1
+}
+
+function getStudentCartLineKey(item, variant = null) {
+  return variant ? `student-menu-${item.id}::variant-${variant.id}` : `student-menu-${item.id}`
+}
+
+function buildStudentVariantItemName(item, variant) {
+  const groupLabelRaw = (item?.menu_group_name || '').trim()
+  const groupLabel = groupLabelRaw === 'Shakes' ? 'Shake' : groupLabelRaw
+  const baseName = (item?.name || '').trim()
+  const variantName = (variant?.name || '').trim()
+  const baseLower = baseName.toLowerCase()
+  const groupLower = groupLabel.toLowerCase()
+  const fullBaseName = groupLabel && !baseLower.includes(groupLower)
+    ? `${baseName} ${groupLabel}`
+    : baseName
+  return variantName ? `${fullBaseName} - ${variantName}` : fullBaseName
+}
+
+function buildStudentCartItem(item, variant = null) {
+  const hasChoices = hasStudentVariantChoices(item)
+  const useVariant = hasChoices && variant
+  return {
+    id: getStudentCartLineKey(item, useVariant ? variant : null),
+    source_item_id: item.id,
+    menu_item_id: item.id,
+    item_variant_id: useVariant ? variant.id : null,
+    item_id: item.item_id || '',
+    name: useVariant ? buildStudentVariantItemName(item, variant) : item.name,
+    price: Number(useVariant ? variant.price : item.price || 0),
+    image_url: item.image_url || '',
+    category_name: item.menu_group_name || item.category_name || 'Menu Item',
+    menu_group_name: item.menu_group_name || '',
+  }
+}
+
+function getStudentItemCartQuantity(cart, item) {
+  return Object.values(cart || {}).reduce((sum, entry) => (
+    Number(entry?.item?.source_item_id) === Number(item?.id) ? sum + Number(entry?.qty || 0) : sum
+  ), 0)
+}
+
+const STUDENT_CART_DRAFT_KEY_PREFIX = 'student_cart_draft_'
+
+function getStudentCartDraftStorageKey(user) {
+  const identity = user?.id || user?.student_id || user?.username || user?.email || 'student'
+  return `${STUDENT_CART_DRAFT_KEY_PREFIX}${identity}`
+}
+
+function readStudentCartDraft(storageKey) {
+  const emptyDraft = {
+    selectedDate: '',
+    packageCart: {},
+    pendingPackageOrder: null,
+    menuCart: {},
+  }
+  if (!storageKey) return emptyDraft
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return emptyDraft
+    const parsed = JSON.parse(raw)
+    return {
+      selectedDate: typeof parsed?.selectedDate === 'string' ? parsed.selectedDate : '',
+      packageCart: parsed?.packageCart && typeof parsed.packageCart === 'object' ? parsed.packageCart : {},
+      pendingPackageOrder: parsed?.pendingPackageOrder ?? null,
+      menuCart: parsed?.menuCart && typeof parsed.menuCart === 'object' ? parsed.menuCart : {},
+    }
+  } catch {
+    return emptyDraft
+  }
+}
+
+function writeStudentCartDraft(storageKey, draft) {
+  if (!storageKey) return
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(draft))
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+function removeStudentCartDraft(storageKey) {
+  if (!storageKey) return
+  try {
+    localStorage.removeItem(storageKey)
+  } catch {
+    // ignore removal failures
+  }
+}
+
+function areSharedCartSnapshotsEqual(prev = {}, next = {}) {
+  if (prev === next) return true
+  if ((prev.selectedDateLabel || '') !== (next.selectedDateLabel || '')) return false
+  if ((prev.summaryTotal || 0) !== (next.summaryTotal || 0)) return false
+  if ((prev.cartError || '') !== (next.cartError || '')) return false
+  if (Boolean(prev.hasSummaryItems) !== Boolean(next.hasSummaryItems)) return false
+
+  const prevPackages = Array.isArray(prev.summaryPackageEntries) ? prev.summaryPackageEntries : []
+  const nextPackages = Array.isArray(next.summaryPackageEntries) ? next.summaryPackageEntries : []
+  if (prevPackages.length !== nextPackages.length) return false
+  for (let index = 0; index < prevPackages.length; index += 1) {
+    const prevEntry = prevPackages[index]
+    const nextEntry = nextPackages[index]
+    if ((prevEntry?.key || prevEntry?.name || '') !== (nextEntry?.key || nextEntry?.name || '')) return false
+    if (Number(prevEntry?.quantity || prevEntry?.qty || 0) !== Number(nextEntry?.quantity || nextEntry?.qty || 0)) return false
+  }
+
+  const prevMenu = Array.isArray(prev.summaryMenuEntries) ? prev.summaryMenuEntries : []
+  const nextMenu = Array.isArray(next.summaryMenuEntries) ? next.summaryMenuEntries : []
+  if (prevMenu.length !== nextMenu.length) return false
+  for (let index = 0; index < prevMenu.length; index += 1) {
+    const prevEntry = prevMenu[index]
+    const nextEntry = nextMenu[index]
+    if (Number(prevEntry?.item?.id || 0) !== Number(nextEntry?.item?.id || 0)) return false
+    if (Number(prevEntry?.qty || 0) !== Number(nextEntry?.qty || 0)) return false
+  }
+
+  return true
+}
+
 function normalizePreviewItemName(value) {
   return String(value || '')
     .toLowerCase()
@@ -214,6 +450,11 @@ const MEAL_CARD_IMAGES = {
     defaultPreference: 'veg',
     image: '/image/meal-breakfast-veg-hero.png',
     label: 'Veg Rice & Curry',
+  },
+  lunch: {
+    defaultPreference: 'non-veg',
+    image: '/image/meal-lunch-nonveg-special.png',
+    label: 'Special Lunch',
   },
   dinner: {
     defaultPreference: 'non-veg',
@@ -362,6 +603,9 @@ function OrderMethodModal({
   return createPortal(
     <div className="sd-modal-overlay" onClick={onCancel}>
       <div className="sd-modal" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="sd-modal-close-btn sd-modal-close-btn-danger" onClick={onCancel} aria-label="Close order method">
+          <X size={14} strokeWidth={2.5} />
+        </button>
         <div className="sd-modal-header">
           <h3 className="sd-modal-title">{title}</h3>
           <p className="sd-modal-sub">{subtitle}</p>
@@ -388,11 +632,6 @@ function OrderMethodModal({
           })}
         </div>
 
-        <div className="sd-modal-footer" style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-          <button type="button" className="sd-btn-secondary" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
       </div>
     </div>,
     document.body
@@ -485,17 +724,17 @@ function DeliveryModal({
 
   const filteredAreas = useMemo(() => {
     const query = normalizeAreaSearchText(cleanAreaQuery)
-    if (!query) return []
-    const matches = query
+    return query
       ? deliveryAreas.filter((area) => {
           const searchable = [area.name, ...(Array.isArray(area.aliases) ? area.aliases : [])]
             .map(normalizeAreaSearchText)
             .join(' ')
           return searchable.includes(query)
         })
-      : []
-    return matches.slice(0, 12)
+      : deliveryAreas
   }, [cleanAreaQuery, deliveryAreas])
+
+  const hasAreaSearch = Boolean(normalizeAreaSearchText(cleanAreaQuery))
 
   const selectDeliveryArea = (area) => {
     setSelectedArea(area)
@@ -652,6 +891,38 @@ function DeliveryModal({
             </div>
           </div>
 
+          {requireFeeEstimate && allowCurrentLocation && (
+            <div className="sd-location-toggle">
+              {locationSource === 'current_location' ? (
+                <div className="sd-location-toggle-active">
+                  <span className="sd-location-toggle-status">
+                    <MapPinned size={15} strokeWidth={2.2} />
+                    Using Current Location
+                  </span>
+                  <button
+                    type="button"
+                    className="sd-location-toggle-btn secondary"
+                    onClick={() => handleLocationSourceChange('address')}
+                  >
+                    Cancel Current Location
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="sd-location-toggle-btn"
+                  onClick={() => {
+                    handleLocationSourceChange('current_location')
+                    handleUseCurrentLocation()
+                  }}
+                >
+                  <MapPinned size={15} strokeWidth={2.2} />
+                  Use Current Location
+                </button>
+              )}
+            </div>
+          )}
+
           {showQuantity && (
             <div>
               <label className="sd-field-label">{quantityLabel}</label>
@@ -709,11 +980,13 @@ function DeliveryModal({
             </label>
             <div className="sd-area-combobox">
               <input
-                className="sd-input"
+                className={`sd-input sd-area-input${selectedArea ? ' has-clear' : ''}`}
                 type="text"
-                placeholder={areasState === 'loading' ? 'Loading delivery areas...' : 'Example: Kokuvil'}
+                placeholder={areasState === 'loading' ? 'Loading delivery areas...' : 'Choose your town or area. Example: Kokuvil, Thirunelveli, Chunnakam.'}
                 value={areaQuery}
                 disabled={areasState === 'loading'}
+                aria-expanded={areaMenuOpen}
+                aria-controls="sd-delivery-area-options"
                 onFocus={() => setAreaMenuOpen(true)}
                 onBlur={() => setTimeout(() => setAreaMenuOpen(false), 120)}
                 onChange={(e) => handleAreaQueryChange(e.target.value)}
@@ -730,8 +1003,8 @@ function DeliveryModal({
                   <X size={14} strokeWidth={2.2} />
                 </button>
               )}
-              {areaMenuOpen && areasState === 'ready' && Boolean(cleanAreaQuery) && !selectedArea && (
-                <div className="sd-area-options">
+              {areaMenuOpen && areasState === 'ready' && !selectedArea && (
+                <div id="sd-delivery-area-options" className="sd-area-options">
                   {filteredAreas.length > 0 ? filteredAreas.map((area) => (
                     <button
                       key={area.id}
@@ -742,16 +1015,15 @@ function DeliveryModal({
                     >
                       <span>{area.name}</span>
                     </button>
-                  )) : (
-                    <div className="sd-area-empty">No allowed delivery area found.</div>
+                  )) : hasAreaSearch ? (
+                    <div className="sd-area-empty">No matching area found.</div>
+                  ) : (
+                    <div className="sd-area-empty">No delivery areas are available right now.</div>
                   )}
                 </div>
               )}
             </div>
             {areasError && <p className="sd-field-error">{areasError}</p>}
-            {!selectedArea && areasState === 'ready' && (
-              <p className="sd-field-hint">Start typing and choose one of the allowed delivery areas.</p>
-            )}
             {selectedArea && (
               <p className="sd-field-hint">Selected: {selectedArea.name}</p>
             )}
@@ -787,34 +1059,6 @@ function DeliveryModal({
 
           {requireFeeEstimate && (
             <div className="sd-delivery-fee">
-              {allowCurrentLocation && (
-                <div className="sd-location-source">
-                  <label className="sd-field-label">Calculate Fee Using</label>
-                  <button
-                    type="button"
-                    className={`sd-location-source-card${locationSource === 'address' ? ' selected' : ''}`}
-                    onClick={() => handleLocationSourceChange('address')}
-                  >
-                    <MapPin size={16} strokeWidth={2.3} />
-                    <span>
-                      <strong>Typed Address</strong>
-                      <em>Use the address fields below.</em>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`sd-location-source-card${locationSource === 'current_location' ? ' selected' : ''}`}
-                    onClick={() => handleLocationSourceChange('current_location')}
-                  >
-                    <MapPinned size={16} strokeWidth={2.3} />
-                    <span>
-                      <strong>Current Location</strong>
-                      <em>Use your device GPS for distance.</em>
-                    </span>
-                  </button>
-                </div>
-              )}
-
               <label className="sd-field-label">Delivery Charge</label>
 
               {!autoEstimateFee && (
@@ -845,12 +1089,6 @@ function DeliveryModal({
                     </button>
                   )}
                 </div>
-              )}
-
-              {!canEstimate && (
-                <p className="sd-field-hint">
-                  Fill address line 1 and delivery area to calculate the delivery fee.
-                </p>
               )}
 
               {feeState === 'loading' && (
@@ -907,6 +1145,10 @@ function DeliveryModal({
               if (requireFeeEstimate && locationSource === 'current_location') {
                 payload.delivery_latitude = coords.lat
                 payload.delivery_longitude = coords.lng
+              }
+              if (requireFeeEstimate) {
+                payload.delivery_fee_label = feeInfo?.delivery_fee_label || formatDeliveryFeeLabel(feeInfo?.delivery_fee, '')
+                payload.delivery_fee_value = Number(feeInfo?.delivery_fee || 0)
               }
               if (showQuantity) payload.quantity = packageQty
               onConfirm(payload)
@@ -1970,6 +2212,24 @@ function CombinedOrderReviewModal({ review, submitting = false, onConfirm, onCan
             )}
           </div>
 
+          <div className="sd-order-review-totals">
+            <div className="sd-order-review-totals-head">Order Summary</div>
+            <div className="sd-order-review-total-row">
+              <span>Food Total</span>
+              <strong>{review.foodSubtotalLabel || 'LKR 0.00'}</strong>
+            </div>
+            {isDelivery && (
+              <div className="sd-order-review-total-row">
+                <span>Delivery Fee</span>
+                <strong>{review.deliveryFeeLabel || 'Calculated at checkout'}</strong>
+              </div>
+            )}
+            <div className="sd-order-review-total-row grand">
+              <span>Total Amount</span>
+              <strong>{review.totalAmountLabel || review.foodSubtotalLabel || 'LKR 0.00'}</strong>
+            </div>
+          </div>
+
           <div className="sd-order-review-details">
             <div>
               <span>Method</span>
@@ -1985,18 +2245,19 @@ function CombinedOrderReviewModal({ review, submitting = false, onConfirm, onCan
                 <strong>{review.phoneNumber}</strong>
               </div>
             )}
-            {isDelivery && (
-              <div>
-                <span>Delivery Fee</span>
-                <strong>{review.deliveryFeeLabel || 'Calculated at checkout'}</strong>
-              </div>
-            )}
           </div>
+
+          {review.deliveryFeeNote && (
+            <div className="sd-order-review-note">
+              <Truck size={16} strokeWidth={2.2} />
+              <span>{review.deliveryFeeNote}</span>
+            </div>
+          )}
 
           <div className="sd-order-review-note">
             <CheckCircle2 size={16} strokeWidth={2.2} />
             <span>
-              Press confirm to place this combined order with {review.packageLines.length} package type{review.packageLines.length === 1 ? '' : 's'} and {review.itemLines.length} cafe item{review.itemLines.length === 1 ? '' : 's'}.
+              {review.confirmationNote || `Press confirm to place this combined order with ${review.packageLines.length} package type${review.packageLines.length === 1 ? '' : 's'} and ${review.itemLines.length} cafe item${review.itemLines.length === 1 ? '' : 's'}.`}
             </span>
           </div>
         </div>
@@ -2077,11 +2338,6 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   })
 
   useEffect(() => {
-    setPackageCart({})
-    setCartError('')
-    setActiveCategory(null)
-    setShowSuggestion(false)
-    setShowOrderMethod(false)
     setShowDelivery(false)
     setShowTakeaway(false)
     setShowPrompt(false)
@@ -2760,16 +3016,35 @@ function MealPackagesPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan
   )
 }
 
-function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, weeklyPlan, onOpenMenu }) {
+function MealPackagesViewerPanel({
+  mealTypes,
+  loadingTypes,
+  onPackageReady,
+  weeklyPlan,
+  onOpenMenu,
+  onContinuePendingOrder,
+  hasPendingPackageOrder = false,
+  pendingPackageOrder = null,
+  sharedMenuCart = {},
+  onSharedMenuCartChange = null,
+  onPendingPackageOrderChange = null,
+  onSharedCartSnapshotChange = null,
+  sharedCartActionRef = null,
+  initialSelectedDate = '',
+  initialPackageCart = {},
+  draftSyncToken = 0,
+  onDraftStateChange = null,
+}) {
   const { data: menuPreviewItems = [], loading: loadingMenuPreview } = useApi(getStudentItems)
-  const [selectedDate, setSelectedDate] = useState(() => toInputDate(new Date()))
+  const [selectedDate, setSelectedDate] = useState(() => initialSelectedDate || toInputDate(new Date()))
   const [activeCategoryKey, setActiveCategoryKey] = useState(null)
   const [focusedMealTime, setFocusedMealTime] = useState('')
   const [selectedMealTime, setSelectedMealTime] = useState('')
   const [wizardStep, setWizardStep] = useState(1)
-  const [packageCart, setPackageCart] = useState({})
+  const [packageCart, setPackageCart] = useState(() => initialPackageCart || {})
   const [cartError, setCartError] = useState('')
   const [pendingRemovePackage, setPendingRemovePackage] = useState(null)
+  const [pendingRemoveMenuItem, setPendingRemoveMenuItem] = useState(null)
   const [showClearPackageCartConfirm, setShowClearPackageCartConfirm] = useState(false)
   const [showSuggestion, setShowSuggestion] = useState(false)
   const [suggestedCategoryKey, setSuggestedCategoryKey] = useState('')
@@ -2777,10 +3052,9 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
   const [deliveryType, setDeliveryType] = useState('takeaway')
   const [showDelivery, setShowDelivery] = useState(false)
   const [showTakeaway, setShowTakeaway] = useState(false)
-  const [showPrompt, setShowPrompt] = useState(false)
-  const [pendingPayload, setPendingPayload] = useState(null)
 
   const todayDate = new Date()
+  const setSharedMenuCart = onSharedMenuCartChange || (() => {})
   const today = toInputDate(todayDate)
   const maxDate = toInputDate(addDays(todayDate, 3))
   const cardDate = selectedDate || today
@@ -2789,11 +3063,37 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
   const cardDayKey = cardDayJs === 0 ? 6 : cardDayJs - 1
   const isWeekend = cardDayKey === 5 || cardDayKey === 6
 
+  useEffect(() => {
+    setSelectedDate(initialSelectedDate || today)
+    setPackageCart(initialPackageCart || {})
+  }, [draftSyncToken, initialSelectedDate, initialPackageCart, today])
+
+  useEffect(() => {
+    onDraftStateChange?.({
+      selectedDate,
+      packageCart,
+    })
+  }, [selectedDate, packageCart, onDraftStateChange])
+
   const selectedDateObj = new Date(`${selectedDate}T00:00:00`)
   const selectedDateLabel = Number.isNaN(selectedDateObj.getTime())
     ? 'selected date'
     : selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
   const previewItems = buildPopularPreviewItems(menuPreviewItems)
+  const pendingSummary = useMemo(() => {
+    const queuedPackageOrders = normalizePackagePayloads(pendingPackageOrder)
+    const packageEntries = getPendingPackageEntries(queuedPackageOrders, mealTypes, weeklyPlan)
+    const packageTotal = packageEntries.reduce((sum, line) => sum + (Number(line.priceValue) || 0) * (Number(line.qty) || 0), 0)
+    const menuEntries = Object.values(sharedMenuCart).filter((entry) => (entry?.qty || 0) > 0)
+    const menuTotal = menuEntries.reduce((sum, entry) => sum + Number(entry.item?.price || 0) * Number(entry.qty || 0), 0)
+
+    return {
+      packageEntries,
+      packageTotal,
+      menuEntries,
+      menuTotal,
+    }
+  }, [pendingPackageOrder, mealTypes, weeklyPlan, sharedMenuCart])
   const dateOptions = Array.from({ length: 4 }, (_, index) => {
     const date = addDays(todayDate, index)
     const value = toInputDate(date)
@@ -2964,6 +3264,11 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
   const lockedDateLabel = lockedPackageEntry?.dateLabel || ''
   const lockedMealTitle = lockedPackageEntry?.title || 'Selected package'
   const lockedReadyTime = getPackageReadyTime(lockedPackageEntry?.mealTypeName || lockedPackageEntry?.mealTime)
+  const summaryPackageEntries = cartEntries.length > 0 ? cartEntries : pendingSummary.packageEntries
+  const summaryPackageTotal = cartEntries.length > 0 ? cartTotal : pendingSummary.packageTotal
+  const summaryMenuEntries = pendingSummary.menuEntries
+  const summaryTotal = summaryPackageTotal + pendingSummary.menuTotal
+  const hasSummaryItems = summaryPackageEntries.length > 0 || summaryMenuEntries.length > 0
 
   useEffect(() => {
     if (lockedPackageEntry?.mealTime) {
@@ -3078,15 +3383,61 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
     setPendingRemovePackage(null)
   }
 
+  const requestRemoveMenuItemFromSummary = (item) => {
+    if (!item?.id) return
+    setPendingRemoveMenuItem(item)
+  }
+
+  const increaseMenuItemInSummary = (item) => {
+    if (!item?.id) return
+    setSharedMenuCart((prev) => ({
+      ...prev,
+      [item.id]: {
+        item,
+        qty: (prev?.[item.id]?.qty ?? 0) + 1,
+      },
+    }))
+  }
+
+  const decreaseMenuItemInSummary = (item) => {
+    if (!item?.id) return
+    const currentQty = Number(sharedMenuCart?.[item.id]?.qty || 0)
+    if (currentQty <= 1) {
+      setPendingRemoveMenuItem(item)
+      return
+    }
+
+    setSharedMenuCart((prev) => ({
+      ...prev,
+      [item.id]: {
+        item,
+        qty: Math.max(0, Number(prev?.[item.id]?.qty || 0) - 1),
+      },
+    }))
+  }
+
+  const confirmRemoveMenuItemFromSummary = () => {
+    if (!pendingRemoveMenuItem?.id) return
+    setSharedMenuCart((prev) => {
+      const next = { ...prev }
+      delete next[pendingRemoveMenuItem.id]
+      return next
+    })
+    setPendingRemoveMenuItem(null)
+  }
+
   const clearPackageCart = () => {
     setPackageCart({})
+    setSharedMenuCart({})
+    onPendingPackageOrderChange?.(null)
     setCartError('')
     setShowClearPackageCartConfirm(false)
+    setPendingRemoveMenuItem(null)
     setSelectedMealTime('')
     setWizardStep(1)
   }
 
-  const buildPayloadAndPrompt = ({
+  const buildPackageCheckoutPayloads = ({
     detailsText = '',
     phoneNumber = '',
     addressLine1 = '',
@@ -3120,15 +3471,11 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
       return
     }
 
-    const payload = payloads.length === 1 ? payloads[0] : payloads
-    setPendingPayload(payload)
-    setShowPrompt(true)
+    return payloads
   }
 
   const resetPackageCheckout = () => {
     setPackageCart({})
-    setPendingPayload(null)
-    setShowPrompt(false)
     setShowDelivery(false)
     setShowTakeaway(false)
     setShowOrderMethod(false)
@@ -3143,43 +3490,67 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
     setWizardStep(1)
   }
 
-  const handlePromptPlaceOnly = async () => {
-    setShowPrompt(false)
-    await onPackageReady(pendingPayload, false)
+  const queuePackageCheckout = async (details = {}) => {
+    const payloads = buildPackageCheckoutPayloads(details)
+    if (!payloads || payloads.length === 0) return
+    const didQueueCheckout = await onPackageReady(payloads, true)
+    if (!didQueueCheckout) return
     resetPackageCheckout()
-  }
-
-  const handlePromptAddItems = async () => {
-    const didQueueMenuItems = await onPackageReady(pendingPayload, true)
-    if (!didQueueMenuItems) return
-    setShowPrompt(false)
-    resetPackageCheckout()
+    onContinuePendingOrder?.({ waitForPendingPackage: true })
   }
 
   const handleContinueFromCart = () => {
     if (cartEntries.length === 0) {
-      setCartError('Add at least one meal package to your cart first.')
-      return
-    }
-
-    const selectedCategories = [...new Set(cartEntries.map((entry) => entry.categoryKey))]
-    const selectedMealTime = normalizeMealSlotName(cartEntries[0]?.mealTime)
-    if (selectedCategories.length === 1) {
-      const currentCategoryKey = selectedCategories[0]
-      const suggestedKey = currentCategoryKey === 'veg' ? 'nonveg' : 'veg'
-      const suggestedCategory = categoryLookup[suggestedKey]
-      const hasOrderableSuggestedPackage = suggestedCategory?.packages?.some(
-        (pkg) => pkg.canOrder && !pkg.closed && normalizeMealSlotName(pkg.mealTime) === selectedMealTime
-      )
-      if (hasOrderableSuggestedPackage) {
-        setSuggestedCategoryKey(suggestedKey)
-        setShowSuggestion(true)
+      if (summaryMenuEntries.length > 0) {
+        onContinuePendingOrder?.({ waitForPendingPackage: pendingSummary.packageEntries.length > 0 })
         return
       }
+      if (pendingSummary.packageEntries.length > 0) {
+        onContinuePendingOrder?.({ waitForPendingPackage: true })
+        return
+      }
+      setCartError('Add at least one menu item or meal package to continue.')
+      return
     }
 
     setShowOrderMethod(true)
   }
+
+  const sharedCartSnapshot = useMemo(() => ({
+    selectedDateLabel,
+    summaryPackageEntries,
+    summaryMenuEntries,
+    summaryTotal,
+    cartError,
+    hasSummaryItems,
+  }), [selectedDateLabel, summaryPackageEntries, summaryMenuEntries, summaryTotal, cartError, hasSummaryItems])
+
+  useEffect(() => {
+    onSharedCartSnapshotChange?.(sharedCartSnapshot)
+  }, [onSharedCartSnapshotChange, sharedCartSnapshot])
+
+  useEffect(() => {
+    if (!sharedCartActionRef) return
+    sharedCartActionRef.current = {
+      onIncreasePackage: addPackageToCart,
+      onDecreasePackage: decreasePackageInCart,
+      onRemovePackage: requestRemovePackageFromCart,
+      onIncreaseMenuItem: increaseMenuItemInSummary,
+      onDecreaseMenuItem: decreaseMenuItemInSummary,
+      onRemoveMenuItem: requestRemoveMenuItemFromSummary,
+      requestClearSharedCart: () => setShowClearPackageCartConfirm(true),
+      onCheckout: handleContinueFromCart,
+    }
+  }, [
+    sharedCartActionRef,
+    addPackageToCart,
+    decreasePackageInCart,
+    requestRemovePackageFromCart,
+    increaseMenuItemInSummary,
+    decreaseMenuItemInSummary,
+    requestRemoveMenuItemFromSummary,
+    handleContinueFromCart,
+  ])
 
   const activeCategory = activeCategoryKey ? categoryLookup[activeCategoryKey] || null : null
 
@@ -3226,6 +3597,387 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
   const packageDeliverySubtitle = lockedPackageEntry
     ? `This ${lockedMealTitle.toLowerCase()} will be delivered at ${lockedReadyTime || 'the scheduled meal time'}. Enter your address and phone number below.`
     : 'Tell us where to deliver this meal package order.'
+
+  const packageCardKeys = isWeekend
+    ? ['breakfast_veg', 'breakfast_nonveg', 'lunch_nonveg', 'dinner_veg', 'dinner_nonveg']
+    : ['breakfast_veg', 'breakfast_nonveg', 'dinner_veg', 'dinner_nonveg']
+
+  const packageCards = packageCardKeys.map((slotKey) => {
+    const [mealTime, rawCategory] = slotKey.split('_')
+    const categoryKey = rawCategory === 'nonveg' ? 'nonveg' : 'veg'
+    const pkg = buildPackageEntryForDate(mealTime, categoryKey, selectedDate)
+    const mealMeta = PACKAGE_MEAL_META[mealTime]
+    const categoryMeta = PACKAGE_CATEGORY_META[categoryKey]
+    const timing = getPackageTimingDetails(mealTime)
+    const fallbackMealType = mealTypes.find((type) => normalizeMealSlotName(type?.name) === mealTime)
+    const cutoff = getCutoffDate(pkg?.mealTypeName || fallbackMealType?.name || mealTime, selectedDate)
+    const msToCutoff = cutoff ? cutoff.getTime() - Date.now() : null
+    const quantity = pkg?.key ? packageCart[pkg.key]?.quantity || 0 : 0
+    const lockedToOtherMeal = Boolean(lockedPackageEntry)
+      && (selectedDate !== lockedDate || normalizeMealSlotName(lockedMealTime) !== mealTime)
+    const isWeekendLunchSpecial = mealTime === 'lunch' && categoryKey === 'nonveg'
+    const displayMealTitle = isWeekendLunchSpecial ? timing.title : (mealMeta?.label || timing.title)
+    const imageSrc = isWeekendLunchSpecial
+      ? MEAL_CARD_IMAGES.lunch?.image || categoryMeta?.image || ''
+      : categoryMeta?.image || MEAL_CARD_IMAGES[mealTime]?.image || ''
+
+    let statusTone = 'available'
+    let statusLabel = 'Available'
+    let helperText = mealTime === 'breakfast'
+      ? 'Breakfast ordering closes at 8:00 PM on the previous day.'
+      : mealTime === 'lunch'
+        ? 'Lunch ordering closes at 8:00 AM on the same day.'
+        : 'Dinner ordering closes at 12:00 PM on the same day.'
+
+    if (!pkg?.canOrder) {
+      statusTone = 'muted'
+      statusLabel = 'Unavailable'
+      helperText = 'This package is not configured for the selected day yet.'
+    } else if (pkg?.closed) {
+      statusTone = 'closed'
+      statusLabel = 'Closed'
+      helperText = mealTime === 'breakfast'
+        ? 'Breakfast ordering closed for this date.'
+        : mealTime === 'lunch'
+          ? 'Lunch ordering closed for this date.'
+        : 'Dinner ordering closed for this date.'
+    } else if (lockedToOtherMeal) {
+      statusTone = 'locked'
+      statusLabel = 'Locked'
+      helperText = `${lockedMealTitle} is already selected for ${lockedDateLabel}. Clear the cart to switch to another meal slot or date.`
+    } else if (msToCutoff != null && msToCutoff <= 3 * 60 * 60 * 1000) {
+      statusTone = 'soon'
+      statusLabel = 'Closing Soon'
+      helperText = mealTime === 'breakfast'
+        ? 'Breakfast ordering closes at 8:00 PM on the previous day.'
+        : mealTime === 'lunch'
+          ? 'Lunch ordering closes at 8:00 AM on the same day.'
+        : 'Dinner ordering closes at 12:00 PM on the same day.'
+    }
+
+    return {
+      key: slotKey,
+      mealTime,
+      pkg,
+      title: `${displayMealTitle} ${categoryKey === 'veg' ? 'Veg' : 'Non-Veg'}`,
+      imageSrc,
+      imageAlt: `${displayMealTitle} ${categoryKey} package`,
+      mealLabel: isWeekendLunchSpecial ? 'Lunch' : (mealMeta?.label || timing.title),
+      categoryLabel: isWeekendLunchSpecial ? 'Weekend Special' : (categoryKey === 'veg' ? 'Veg Package' : 'Non-Veg Package'),
+      priceLabel: pkg?.priceLabel || 'LKR price updating...',
+      orderText: pkg?.orderText || timing.orderText,
+      readyText: pkg?.readyText || timing.readyText,
+      statusTone,
+      statusLabel,
+      helperText,
+      dishes: Array.isArray(pkg?.dishes) ? pkg.dishes.slice(0, 4) : [],
+      quantity,
+      disabled: lockedToOtherMeal || !pkg?.canOrder || pkg?.closed,
+    }
+  })
+
+  const packageMealSections = ['breakfast', 'lunch', 'dinner']
+    .map((mealTime) => {
+      const cards = packageCards.filter((card) => card.mealTime === mealTime)
+      if (!cards.length) return null
+
+      const mealMeta = PACKAGE_MEAL_META[mealTime]
+      const timing = getPackageTimingDetails(mealTime)
+
+      return {
+        mealTime,
+        title: mealMeta?.label || timing.title,
+        orderText: timing.orderText,
+        readyText: timing.readyText,
+        cards,
+      }
+    })
+    .filter(Boolean)
+
+  return (
+    <div id={ORDER_SECTION_IDS.all} className="sd-panel sd-order-stage-card sd-scroll-anchor">
+      <div className="sd-panel-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <h2 className="sd-panel-title">Meal Ordering</h2>
+        </div>
+        {hasPendingPackageOrder && <span className="sd-order-placeholder-badge">Extras unlocked</span>}
+      </div>
+
+      <div className="sd-ordering-main">
+          <section className="sd-order-stage">
+            <div className="sd-order-stage-head">
+              <div>
+                <h3 className="sd-home-title">Select Meal Day</h3>
+                <p className="sd-home-copy">Choose the date first. Availability, pricing, and package details update automatically below.</p>
+              </div>
+              <div className="sd-order-date-badge">{selectedDateLabel}</div>
+            </div>
+
+            <div className="sd-order-date-panel">
+              <div className="sd-date-strip compact" aria-label="Select meal day">
+                {dateOptions.map((option) => {
+                  const isLockedOut = Boolean(lockedPackageEntry) && option.value !== lockedDate
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`sd-date-chip${selectedDate === option.value ? ' active' : ''}${isLockedOut ? ' disabled' : ''}`}
+                      onClick={() => handleSelectedDateChange(option.value)}
+                      disabled={isLockedOut}
+                    >
+                      <span>{option.label}</span>
+                      <small>{option.sub}</small>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="sd-order-date-picker-shell">
+                <div className="sd-order-date-picker-copy">
+                  <span className="sd-order-date-picker-label">Pick another day</span>
+                  <strong>{selectedDateLabel}</strong>
+                  <small>Use the calendar to choose any available date in this order window.</small>
+                </div>
+                <label className="sd-order-date-picker-control">
+                  <CalendarDays size={16} strokeWidth={2.2} />
+                  <input
+                    type="date"
+                    className="sd-date-picker sd-order-date-picker-input"
+                    value={selectedDate}
+                    min={today}
+                    max={maxDate}
+                    onChange={(e) => handleSelectedDateChange(e.target.value)}
+                    disabled={Boolean(lockedPackageEntry)}
+                  />
+                </label>
+              </div>
+
+              <div className={`sd-package-lock-note${lockedPackageEntry ? '' : ' soft'}`}>
+                {lockedPackageEntry
+                  ? `${lockedMealTitle} is selected for ${lockedDateLabel}. Keep adding within that meal slot, or clear the cart to switch.`
+                  : 'One meal slot remains active per checkout, while Veg and Non-Veg stay available inside that selected slot.'}
+              </div>
+            </div>
+          </section>
+
+          <section id={ORDER_SECTION_IDS.mealPackages} className="sd-order-stage sd-scroll-anchor">
+            <div className="sd-order-stage-head">
+              <div>
+                <h3 className="sd-home-title">Choose Your Meal Package</h3>
+              </div>
+            </div>
+
+            {loadingTypes ? (
+              <div className="sd-package-summary-empty">
+                <Spinner size="sm" />
+                <span>Loading meal packages...</span>
+              </div>
+            ) : (
+              <div className="sd-order-package-groups">
+                {packageMealSections.map((section) => (
+                  <div key={section.mealTime} className="sd-order-package-group">
+                    <div className="sd-order-package-group-head">
+                      <div>
+                        <h4 className="sd-order-package-group-title">{section.title}</h4>
+                        <p className="sd-order-package-group-copy">
+                          {section.orderText}
+                          {' • '}
+                          {section.readyText}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className={`sd-order-package-grid${section.cards.length === 1 ? ' single' : ''}`}>
+                      {section.cards.map((card) => (
+                        <article key={card.key} className={`sd-order-package-card status-${card.statusTone}${card.quantity > 0 ? ' in-cart' : ''}`}>
+                          <div className="sd-order-package-media">
+                            {card.imageSrc ? (
+                              <img src={card.imageSrc} alt={card.imageAlt} className="sd-order-package-image" />
+                            ) : (
+                              <div className="sd-order-package-image-placeholder">
+                                <UtensilsCrossed size={28} strokeWidth={2.2} />
+                              </div>
+                            )}
+                            <span className={`sd-order-status-badge ${card.statusTone}`}>{card.statusLabel}</span>
+                            <div className="sd-order-package-badges">
+                              <span className="sd-order-pill">{card.mealLabel}</span>
+                              <span className="sd-order-pill subtle">{card.categoryLabel}</span>
+                            </div>
+                          </div>
+
+                          <div className="sd-order-package-body">
+                            <div className="sd-order-package-copy">
+                              <h4>{card.title}</h4>
+                            </div>
+
+                            <div className="sd-order-package-meta">
+                              <span>
+                                <Clock3 size={14} strokeWidth={2.2} />
+                                {card.orderText}
+                              </span>
+                              <span>
+                                <Package2 size={14} strokeWidth={2.2} />
+                                {card.readyText}
+                              </span>
+                            </div>
+
+                            <div className="sd-order-package-includes">
+                              <strong>Included meal details</strong>
+                              <div className="sd-order-package-dish-list">
+                                {card.dishes.length > 0 ? card.dishes.map((dish) => (
+                                  <span key={dish} className="sd-order-package-dish">{dish}</span>
+                                )) : (
+                                  <span className="sd-order-package-dish muted">Meal details will appear here for this selected day.</span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="sd-order-package-footer">
+                              <div className="sd-order-package-price">
+                                <span>Price</span>
+                                <strong>{card.priceLabel}</strong>
+                              </div>
+                              <button
+                                type="button"
+                                className="sd-order-package-action"
+                                disabled={card.disabled}
+                                onClick={() => card.pkg && addPackageToCart(card.pkg)}
+                              >
+                                {card.disabled
+                                  ? card.statusLabel
+                                  : card.quantity > 0
+                                    ? `Add Another (${card.quantity})`
+                                    : 'Add to Cart'}
+                              </button>
+                            </div>
+
+                            <p className={`sd-order-package-helper tone-${card.statusTone}`}>{card.helperText}</p>
+
+                            {card.quantity > 0 && card.pkg && (
+                              <div className="sd-order-package-qty-row">
+                                <span>In cart</span>
+                                <div className="sd-cart-qty-controls">
+                                  <button type="button" className="sd-cart-qty-btn" onClick={() => decreasePackageInCart(card.pkg)}>
+                                    <Minus size={14} strokeWidth={2.4} />
+                                  </button>
+                                  <span className="sd-cart-qty-num">{card.quantity}</span>
+                                  <button type="button" className="sd-cart-qty-btn" onClick={() => addPackageToCart(card.pkg)}>
+                                    <Plus size={14} strokeWidth={2.4} />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+          </section>
+
+        </div>
+
+      {pendingRemovePackage && (
+        <ConfirmDialog
+          title="Remove package?"
+          message={`Do you want to remove ${pendingRemovePackage.name} from your cart?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemovePackageFromCart}
+          onCancel={() => setPendingRemovePackage(null)}
+        />
+      )}
+
+      {showClearPackageCartConfirm && (
+        <ConfirmDialog
+          title="Clear cart?"
+          message="Are you sure you want to remove all items from your shared cart?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          onConfirm={clearPackageCart}
+          onCancel={() => setShowClearPackageCartConfirm(false)}
+        />
+      )}
+
+      {pendingRemoveMenuItem && (
+        <ConfirmDialog
+          title="Remove item?"
+          message={`Do you want to remove ${pendingRemoveMenuItem.name} from your cart?`}
+          confirmLabel="Yes, Remove"
+          cancelLabel="No, Keep"
+          onConfirm={confirmRemoveMenuItemFromSummary}
+          onCancel={() => setPendingRemoveMenuItem(null)}
+        />
+      )}
+
+      {showOrderMethod && (
+        <OrderMethodModal
+          title="Choose Order Method"
+          subtitle="Select how you would like to receive this meal package order."
+          options={packageOrderMethodOptions}
+          onSelect={(method) => {
+            setDeliveryType(method)
+            setShowOrderMethod(false)
+            if (method === 'delivery') {
+              setShowDelivery(true)
+              return
+            }
+            setShowTakeaway(true)
+          }}
+          onCancel={() => setShowOrderMethod(false)}
+        />
+      )}
+
+      {showDelivery && (
+        <DeliveryModal
+          title={summaryMenuEntries.length > 0 ? 'Delivery Details' : 'Delivery Address'}
+          subtitle={summaryMenuEntries.length > 0 ? '' : packageDeliverySubtitle}
+          confirmLabel={summaryMenuEntries.length > 0 ? 'Review Order' : 'Confirm Details'}
+          showQuantity={false}
+          allowCurrentLocation={summaryMenuEntries.length > 0}
+          requireFeeEstimate={summaryMenuEntries.length > 0}
+          autoEstimateFee={summaryMenuEntries.length > 0}
+          hasPackage={summaryMenuEntries.length === 0}
+          deliveryIncludedText={summaryMenuEntries.length > 0
+            ? ''
+            : 'Free delivery applies only to meal-package-only orders.'}
+          onCancel={() => setShowDelivery(false)}
+          onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
+            setShowDelivery(false)
+            void queuePackageCheckout({
+              detailsText: delivery_address,
+              phoneNumber: phone_number,
+              addressLine1: address_line_1,
+              addressLine2: address_line_2,
+              cityArea: city_area,
+              locationSource: location_source,
+              deliveryLatitude: delivery_latitude,
+              deliveryLongitude: delivery_longitude,
+            })
+          }}
+        />
+      )}
+
+      {showTakeaway && (
+        <TakeawayModal
+          title="Pickup Details"
+          subtitle={packageTakeawaySubtitle}
+          showQuantity={false}
+          onCancel={() => setShowTakeaway(false)}
+          onConfirm={({ phone_number, pickup_note }) => {
+            setShowTakeaway(false)
+            void queuePackageCheckout({
+              detailsText: pickup_note,
+              phoneNumber: phone_number,
+            })
+          }}
+        />
+      )}
+    </div>
+  )
 
   const mealSlotCards = ['breakfast', 'lunch', 'dinner'].map((mealTime) => {
     const meta = PACKAGE_MEAL_META[mealTime]
@@ -3727,28 +4479,6 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
         />
       )}
 
-      {pendingRemovePackage && (
-        <ConfirmDialog
-          title="Remove package?"
-          message={`Do you want to remove ${pendingRemovePackage.name} from your cart?`}
-          confirmLabel="Yes, Remove"
-          cancelLabel="No, Keep"
-          onConfirm={confirmRemovePackageFromCart}
-          onCancel={() => setPendingRemovePackage(null)}
-        />
-      )}
-
-      {showClearPackageCartConfirm && (
-        <ConfirmDialog
-          title="Clear cart?"
-          message="Are you sure you want to remove all meal packages from your cart?"
-          confirmLabel="Yes, Clear"
-          cancelLabel="No, Keep"
-          onConfirm={clearPackageCart}
-          onCancel={() => setShowClearPackageCartConfirm(false)}
-        />
-      )}
-
       {showSuggestion && (
         <PackageSuggestionModal
           suggestedLabel={suggestedCategoryKey === 'nonveg' ? 'Non-Veg' : 'Veg'}
@@ -3789,18 +4519,21 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
 
       {showDelivery && (
         <DeliveryModal
-          title="Delivery Address"
-          subtitle={packageDeliverySubtitle}
-          confirmLabel="Confirm Details"
+          title={summaryMenuEntries.length > 0 ? 'Delivery Details' : 'Delivery Address'}
+          subtitle={summaryMenuEntries.length > 0 ? '' : packageDeliverySubtitle}
+          confirmLabel={summaryMenuEntries.length > 0 ? 'Review Order' : 'Confirm Details'}
           showQuantity={false}
-          allowCurrentLocation={false}
-          requireFeeEstimate={false}
-          hasPackage
-          deliveryIncludedText="Free delivery is included for meal package checkout."
+          allowCurrentLocation={summaryMenuEntries.length > 0}
+          requireFeeEstimate={summaryMenuEntries.length > 0}
+          autoEstimateFee={summaryMenuEntries.length > 0}
+          hasPackage={summaryMenuEntries.length === 0}
+          deliveryIncludedText={summaryMenuEntries.length > 0
+            ? ''
+            : 'Free delivery applies only to meal-package-only orders.'}
           onCancel={() => setShowDelivery(false)}
           onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
             setShowDelivery(false)
-            buildPayloadAndPrompt({
+            void queuePackageCheckout({
               detailsText: delivery_address,
               phoneNumber: phone_number,
               addressLine1: address_line_1,
@@ -3822,23 +4555,10 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
           onCancel={() => setShowTakeaway(false)}
           onConfirm={({ phone_number, pickup_note }) => {
             setShowTakeaway(false)
-            buildPayloadAndPrompt({
+            void queuePackageCheckout({
               detailsText: pickup_note,
               phoneNumber: phone_number,
             })
-          }}
-        />
-      )}
-
-      {showPrompt && (
-        <AddMenuItemsPrompt
-          deliveryType={normalizePackagePayloads(pendingPayload)[0]?.delivery_type}
-          canAddItems={isMenuItemOrderOpen()}
-          onAddItems={handlePromptAddItems}
-          onPlaceOnly={handlePromptPlaceOnly}
-          onCancel={() => {
-            setShowPrompt(false)
-            setPendingPayload(null)
           }}
         />
       )}
@@ -3846,9 +4566,19 @@ function MealPackagesViewerPanel({ mealTypes, loadingTypes, onPackageReady, week
   )
 }
 
-function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
+function ItemDetailsModal({
+  item,
+  initialQty = 1,
+  onClose,
+  onAdd,
+  getVariantQty = () => 0,
+  onAddVariant = () => {},
+  onDecreaseVariant = () => {},
+}) {
   useBodyScrollLock()
 
+  const hasVariants = hasStudentVariantChoices(item)
+  const variants = getStudentItemActiveVariants(item)
   const [qty, setQty] = useState(Math.max(1, initialQty || 1))
 
   const increaseQty = () => setQty((prev) => prev + 1)
@@ -3861,8 +4591,12 @@ function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
           <X size={16} strokeWidth={2.4} />
         </button>
         <div className="sd-modal-header">
-          <h3 className="sd-modal-title">Item Details</h3>
-          <p className="sd-modal-sub">Review the item details and choose the quantity before adding it to your cart.</p>
+          <h3 className="sd-modal-title">{hasVariants ? 'View Item' : 'Item Details'}</h3>
+          <p className="sd-modal-sub">
+            {hasVariants
+              ? 'Choose the variant you want and add it directly to your cart.'
+              : 'Review the item details and choose the quantity before adding it to your cart.'}
+          </p>
         </div>
 
         {item.image_url ? (
@@ -3876,34 +4610,75 @@ function ItemDetailsModal({ item, initialQty = 1, onClose, onAdd }) {
         <div className="sd-item-modal-body">
           <div className="sd-item-modal-tags">
             {item.item_id && <span className="sd-item-modal-tag">{item.item_id}</span>}
-            {item.category_name && <span className="sd-item-modal-tag">{item.category_name}</span>}
+            {(item.menu_group_name || item.category_name) && <span className="sd-item-modal-tag">{item.menu_group_name || item.category_name}</span>}
           </div>
 
           <h4 className="sd-item-modal-name">{item.name}</h4>
           <p className="sd-item-modal-price">Rs. {Number(item.price).toFixed(2)}</p>
 
-          <div className="sd-item-modal-qty-wrap">
-            <span className="sd-field-label" style={{ marginBottom: 0 }}>Quantity</span>
-            <div className="sd-item-modal-qty">
-              <button type="button" className="sd-item-modal-qty-btn" onClick={decreaseQty} aria-label="Decrease quantity">
-                <Minus size={15} strokeWidth={2.3} />
-              </button>
-              <span className="sd-item-modal-qty-value">{qty}</span>
-              <button type="button" className="sd-item-modal-qty-btn" onClick={increaseQty} aria-label="Increase quantity">
-                <Plus size={15} strokeWidth={2.3} />
-              </button>
+          {hasVariants ? (
+            <div style={{ display: 'grid', gap: '10px', marginTop: '18px' }}>
+              {variants.map((variant) => {
+                const variantQty = getVariantQty(item, variant)
+                return (
+                  <div
+                    key={variant.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px 14px',
+                      borderRadius: '14px',
+                      border: '1px solid rgba(156, 120, 91, 0.16)',
+                      background: '#fff',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 700, color: T.coffee }}>{variant.name}</div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: T.caramel, marginTop: '4px' }}>
+                        Rs. {Number(variant.price || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="sd-cart-qty-controls sd-item-modal-variant-controls">
+                      <button type="button" className="sd-cart-qty-btn sd-item-modal-variant-btn" onClick={() => onDecreaseVariant(item, variant)} disabled={variantQty <= 0}>
+                        <Minus size={14} strokeWidth={2.4} />
+                      </button>
+                      <span className="sd-cart-qty-num sd-item-modal-variant-qty">{variantQty}</span>
+                      <button type="button" className="sd-cart-qty-btn sd-item-modal-variant-btn" onClick={() => onAddVariant(item, variant)}>
+                        <Plus size={14} strokeWidth={2.4} />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-          </div>
+          ) : (
+            <div className="sd-item-modal-qty-wrap">
+              <span className="sd-field-label" style={{ marginBottom: 0 }}>Quantity</span>
+              <div className="sd-item-modal-qty">
+                <button type="button" className="sd-item-modal-qty-btn" onClick={decreaseQty} aria-label="Decrease quantity">
+                  <Minus size={15} strokeWidth={2.3} />
+                </button>
+                <span className="sd-item-modal-qty-value">{qty}</span>
+                <button type="button" className="sd-item-modal-qty-btn" onClick={increaseQty} aria-label="Increase quantity">
+                  <Plus size={15} strokeWidth={2.3} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="sd-modal-footer" style={{ display: 'flex', gap: '10px', marginTop: '18px' }}>
-          <button type="button" className="sd-btn-secondary" onClick={onClose}>
-            Cancel
+          <button type="button" className={hasVariants ? 'sd-btn-primary' : 'sd-btn-secondary'} onClick={onClose}>
+            {hasVariants ? 'Done' : 'Cancel'}
           </button>
-          <button type="button" className="sd-btn-primary" onClick={() => onAdd(item, qty)}>
-            <Plus size={16} strokeWidth={2.2} />
-            Add to Cart
-          </button>
+          {!hasVariants && (
+            <button type="button" className="sd-btn-primary" onClick={() => onAdd(item, qty)}>
+              <Plus size={16} strokeWidth={2.2} />
+              Add to Cart
+            </button>
+          )}
         </div>
       </div>
     </div>,
@@ -3950,6 +4725,212 @@ const compareMenuItemsByCode = (a, b) => {
   })
 }
 
+function buildStudentMenuSections(items = [], activeShortcut = 'all', search = '') {
+  const q = search.toLowerCase().trim()
+  const grouped = new Map()
+
+  const filteredItems = q
+    ? items.filter((item) => {
+        const variantText = getStudentItemActiveVariants(item).map((variant) => variant.name || '').join(' ').toLowerCase()
+        return (
+          (item.name || '').toLowerCase().includes(q)
+          || (item.item_id || '').toLowerCase().includes(q)
+          || (item.menu_group_name || '').toLowerCase().includes(q)
+          || (item.category_name || '').toLowerCase().includes(q)
+          || variantText.includes(q)
+        )
+      })
+    : items
+
+  filteredItems.slice().sort(compareMenuItemsByCode).forEach((item) => {
+    const key = getStudentMenuSectionKey(item)
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        label: getStudentMenuSectionLabel(item),
+        items: [],
+      })
+    }
+    grouped.get(key).items.push(item)
+  })
+
+  const sections = [...grouped.values()]
+
+  if (activeShortcut === 'all' || activeShortcut === 'meal-packages') {
+    return sections
+  }
+
+  const selectedSection = sections.find((section) => section.key === activeShortcut)
+  if (!selectedSection) return sections
+  return [selectedSection, ...sections.filter((section) => section.key !== activeShortcut)]
+}
+
+function SharedOrderCartSidebar({
+  snapshot,
+  actionsRef,
+  mobile = false,
+  onClose = null,
+}) {
+  const {
+    selectedDateLabel = 'Selected date',
+    summaryPackageEntries = [],
+    summaryMenuEntries = [],
+    summaryTotal = 0,
+    cartError = '',
+    hasSummaryItems = false,
+  } = snapshot || {}
+
+  const actions = actionsRef?.current || {}
+  const packageItemCount = summaryPackageEntries.reduce((sum, entry) => sum + Number(entry.quantity || entry.qty || 0), 0)
+  const menuItemCount = summaryMenuEntries.reduce((sum, entry) => sum + Number(entry.qty || 0), 0)
+  const totalItemCount = packageItemCount + menuItemCount
+
+  return (
+    <section className={`sd-order-summary-card${mobile ? ' sd-order-summary-card-mobile' : ''}`}>
+      <div className="sd-order-stage-head compact">
+        <div>
+          <p className="sd-home-kicker">Your Cart</p>
+          <p className="sd-order-summary-subtitle">Selected items</p>
+        </div>
+        <div className="sd-order-summary-head-actions">
+          {hasSummaryItems && (
+            <span className="sd-order-summary-count">{totalItemCount} item{totalItemCount === 1 ? '' : 's'}</span>
+          )}
+          {mobile && (
+            <button
+              type="button"
+              className="sd-mobile-cart-close"
+              onClick={() => onClose?.()}
+              aria-label="Close cart"
+            >
+              <X size={16} strokeWidth={2.2} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="sd-order-summary-day">
+        <span>Selected Meal Day</span>
+        <strong>{selectedDateLabel}</strong>
+      </div>
+
+      <div className="sd-order-summary-items">
+        {!hasSummaryItems ? (
+          <div className="sd-package-summary-empty">
+            <ShoppingCart size={18} strokeWidth={2.2} />
+            <span>No items selected yet.</span>
+          </div>
+        ) : (
+          <>
+            {summaryPackageEntries.length > 0 && (
+              <>
+                <div className="sd-order-summary-section-label">Meal Packages</div>
+                <div className="sd-order-summary-list">
+                  {summaryPackageEntries.map((entry) => {
+                    const qty = Number(entry.quantity || entry.qty || 0)
+                    const unitPrice = Number(entry.priceValue || 0)
+                    const totalLabel = `LKR ${(unitPrice * qty).toFixed(2)}`
+                    const detailLabel = entry.dateLabel || (entry.date ? formatOrderSuccessDate(entry.date) : selectedDateLabel)
+                    const unitLabel = entry.unitPriceLabel || `LKR ${unitPrice.toFixed(2)} each`
+
+                    return (
+                      <div key={entry.key} className="sd-order-summary-row cashier-style">
+                        <div className="sd-order-summary-row-info">
+                          <div className="sd-order-summary-row-name">{entry.label || entry.name}</div>
+                          <div className="sd-order-summary-row-meta">{detailLabel}</div>
+                          <div className="sd-order-summary-row-unit">{unitLabel}</div>
+                          <div className="sd-cart-qty-controls">
+                            <button type="button" className="sd-cart-qty-btn" onClick={() => actions.onDecreasePackage?.(entry)}>
+                              <Minus size={14} strokeWidth={2.4} />
+                            </button>
+                            <span className="sd-cart-qty-num">{qty}</span>
+                            <button type="button" className="sd-cart-qty-btn" onClick={() => actions.onIncreasePackage?.(entry)}>
+                              <Plus size={14} strokeWidth={2.4} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="sd-order-summary-row-right">
+                          <span className="sd-order-summary-line-total">{totalLabel}</span>
+                          <button type="button" className="sd-order-summary-remove" onClick={() => actions.onRemovePackage?.(entry)}>
+                            <X size={14} strokeWidth={2.4} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+
+            {summaryMenuEntries.length > 0 && (
+              <>
+                <div className="sd-order-summary-section-label">Menu Items</div>
+                <div className="sd-order-summary-list">
+                  {summaryMenuEntries.map(({ item, qty }) => {
+                    const unitPrice = Number(item.price || 0)
+                    const totalLabel = `Rs.${(unitPrice * qty).toFixed(2)}`
+                    const unitLabel = `Rs.${unitPrice.toFixed(2)} each`
+
+                    return (
+                      <div key={item.id} className="sd-order-summary-row cashier-style">
+                        <div className="sd-order-summary-row-info">
+                          <div className="sd-order-summary-row-name">{item.name}</div>
+                          <div className="sd-order-summary-row-meta">{item.category_name || 'Menu Item'}</div>
+                          <div className="sd-order-summary-row-unit">{unitLabel}</div>
+                          <div className="sd-cart-qty-controls">
+                            <button type="button" className="sd-cart-qty-btn" onClick={() => actions.onDecreaseMenuItem?.(item)}>
+                              <Minus size={14} strokeWidth={2.4} />
+                            </button>
+                            <span className="sd-cart-qty-num">{qty}</span>
+                            <button type="button" className="sd-cart-qty-btn" onClick={() => actions.onIncreaseMenuItem?.(item)}>
+                              <Plus size={14} strokeWidth={2.4} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="sd-order-summary-row-right">
+                          <span className="sd-order-summary-line-total">{totalLabel}</span>
+                          <button type="button" className="sd-order-summary-remove" onClick={() => actions.onRemoveMenuItem?.(item)}>
+                            <X size={14} strokeWidth={2.4} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+
+      {cartError && <div className="sd-alert error">{cartError}</div>}
+
+      {hasSummaryItems && <div className="sd-order-summary-divider" />}
+
+      <div className="sd-package-summary-total">
+        <span>Total</span>
+        <strong>LKR {Number(summaryTotal || 0).toFixed(2)}</strong>
+      </div>
+
+      <div className="sd-order-summary-footer-actions">
+        <button
+          type="button"
+          className="sd-btn-primary"
+          disabled={!hasSummaryItems}
+          onClick={() => actions.onCheckout?.()}
+        >
+          Checkout
+        </button>
+        {hasSummaryItems && (
+          <button type="button" className="sd-summary-clear sd-summary-clear-bottom" onClick={() => actions.requestClearSharedCart?.()}>
+            Clear
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function MenuItemsPanel({
   refetchOrders,
   pendingPackageOrder,
@@ -3960,10 +4941,18 @@ function MenuItemsPanel({
   mealTypes = [],
   weeklyPlan = {},
   onFloatingCartBarChange,
+  embedded = false,
+  headerTitle = 'Menu Items',
+  headerSubtitle = '',
+  sharedCart = null,
+  onSharedCartChange = null,
+  embeddedCheckoutRequestToken = 0,
+  activeShortcut = 'all',
+  suppressEmbeddedMobileCart = false,
 }) {
   const { data: rawItems = [], loading: loadingItems } = useApi(getStudentItems)
   const [search, setSearch] = useState('')
-  const [cart, setCart] = useState({})
+  const [localCart, setLocalCart] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -3980,7 +4969,9 @@ function MenuItemsPanel({
   const [combinedOrderReview, setCombinedOrderReview] = useState(null)
   const [preparingCombinedReview, setPreparingCombinedReview] = useState(false)
   const [selectedMenuDate, setSelectedMenuDate] = useState(() => toInputDate(new Date()))
-  const categoryRefs = useRef({})
+  const lastEmbeddedCheckoutTokenRef = useRef(0)
+  const cart = sharedCart ?? localCart
+  const setCart = onSharedCartChange ?? setLocalCart
   const packageOrders = normalizePackagePayloads(pendingPackageOrder)
   const hasPendingPackageOrder = packageOrders.length > 0
   const primaryPackageOrder = packageOrders[0]
@@ -3996,24 +4987,9 @@ function MenuItemsPanel({
 
   useBodyScrollLock(showMobileCart)
 
-  const categories = useMemo(() => {
-    const q = search.toLowerCase()
-    const filtered = q
-      ? rawItems.filter((i) =>
-          i.name.toLowerCase().includes(q) ||
-          (i.item_id && i.item_id.toLowerCase().includes(q)) ||
-          (i.category_name && i.category_name.toLowerCase().includes(q))
-        )
-      : rawItems
-
-    const map = {}
-    filtered.slice().sort(compareMenuItemsByCode).forEach((item) => {
-      const cat = item.category_name || 'Other'
-      if (!map[cat]) map[cat] = []
-      map[cat].push(item)
-    })
-    return Object.entries(map)
-  }, [rawItems, search])
+  const menuSections = useMemo(() => {
+    return buildStudentMenuSections(rawItems, activeShortcut, search)
+  }, [activeShortcut, rawItems, search])
 
   const cartEntries = Object.values(cart).filter((e) => e.qty > 0)
   const cartTotal = cartEntries.reduce((sum, e) => sum + Number(e.item.price) * e.qty, 0)
@@ -4021,13 +4997,15 @@ function MenuItemsPanel({
   const cartCount = cartEntries.reduce((sum, e) => sum + e.qty, 0)
   const displayCartCount = cartCount + packageCount
   const menuOrderingOpen = isMenuItemOrderOpen()
+  const hasMenuItemsInCart = cartEntries.length > 0
+  const isPackageOnlyCheckout = hasPendingPackageOrder && !hasMenuItemsInCart
   const showFloatingCartBar = (cartEntries.length > 0 || hasPendingPackageOrder)
     && !selectedItem
     && !showOrderMethod
     && !showDelivery
     && !showTakeaway
     && !showMobileCart
-  const orderButtonLabel = !menuOrderingOpen
+  const orderButtonLabel = !menuOrderingOpen && hasMenuItemsInCart
     ? 'Orders open at 4:00 AM'
     : hasPendingPackageOrder && cartCount === 0
       ? `Place Order (${packageCount} pkg)`
@@ -4059,6 +5037,14 @@ function MenuItemsPanel({
       [item.id]: { item, qty: (prev[item.id]?.qty ?? 0) + qtyToAdd },
     }))
 
+  const addBaseMenuItemToCart = (item, qtyToAdd = 1) => {
+    addToCart(buildStudentCartItem(item), qtyToAdd)
+  }
+
+  const addVariantToCart = (item, variant, qtyToAdd = 1) => {
+    addToCart(buildStudentCartItem(item, variant), qtyToAdd)
+  }
+
   const openItemDetails = (item) => {
     setSelectedItem(item)
   }
@@ -4072,6 +5058,8 @@ function MenuItemsPanel({
       ...prev,
       [item.id]: { item, qty: prev[item.id].qty + 1 },
     }))
+
+  const getVariantQty = (item, variant) => cart[getStudentCartLineKey(item, variant)]?.qty ?? 0
 
   const updatePendingPackageQuantity = (entry, delta) => {
     if (!onPendingPackageOrderChange) return
@@ -4151,6 +5139,11 @@ function MenuItemsPanel({
     setShowShopClosedConfirm(true)
   }
 
+  const getPackageOnlyDeliveryFeeLabel = (value) => {
+    const formatted = formatDeliveryFeeLabel(value, '')
+    return formatted === 'Free' || !formatted ? 'Free (meal package only)' : formatted
+  }
+
   const submitCartOrder = async ({
     deliveryType,
     phoneNumber = '',
@@ -4162,7 +5155,7 @@ function MenuItemsPanel({
     deliveryLatitude = null,
     deliveryLongitude = null,
   }) => {
-    if (!isMenuItemOrderOpen()) {
+    if (cartEntries.length > 0 && !isMenuItemOrderOpen()) {
       showShopClosedPopup()
       return
     }
@@ -4185,7 +5178,8 @@ function MenuItemsPanel({
           delivery_type: checkoutMethod,
           quantity: qty,
           order_type: 'item',
-          item: item.id,
+          menu_item: item.menu_item_id || null,
+          item_variant: item.item_variant_id || null,
           phone_number: checkoutPhone,
           delivery_address: checkoutDetails,
           address_line_1: checkoutAddressLine1,
@@ -4202,8 +5196,11 @@ function MenuItemsPanel({
       const allOrders = hasPendingPackageOrder ? [...packageOrders, ...itemOrders] : itemOrders
       const { data: createdOrders = [] } = await placeMealOrdersBatch(allOrders)
       const firstCreatedOrder = Array.isArray(createdOrders) ? createdOrders[0] : null
+      const packageOnlyCheckout = hasPendingPackageOrder && cartEntries.length === 0
       const deliveryFeeLabel = checkoutMethod === 'delivery'
-        ? formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, 'Calculated at checkout')
+        ? packageOnlyCheckout
+          ? getPackageOnlyDeliveryFeeLabel(firstCreatedOrder?.delivery_fee)
+          : formatDeliveryFeeLabel(firstCreatedOrder?.delivery_fee, 'Calculated at checkout')
         : ''
       const itemSummaryLines = cartEntries.map(({ item, qty }) => ({
         name: item.name,
@@ -4240,75 +5237,138 @@ function MenuItemsPanel({
       setShowTakeaway(false)
     } catch (err) {
       const d = err.response?.data
-      setError(d?.detail || d?.item?.[0] || d?.phone_number?.[0] || d?.delivery_address?.[0] || JSON.stringify(d) || 'Failed to place order.')
-      showToast(d?.detail || d?.phone_number?.[0] || d?.delivery_address?.[0] || 'Failed to place order.', 'error')
+      setError(d?.detail || d?.menu_item?.[0] || d?.item_variant?.[0] || d?.item?.[0] || d?.phone_number?.[0] || d?.delivery_address?.[0] || JSON.stringify(d) || 'Failed to place order.')
+      showToast(d?.detail || d?.menu_item?.[0] || d?.item_variant?.[0] || d?.phone_number?.[0] || d?.delivery_address?.[0] || 'Failed to place order.', 'error')
     } finally {
       setSubmitting(false)
     }
   }
 
-  const openCombinedOrderReview = async () => {
-    if (!hasPendingPackageOrder || !primaryPackageOrder) return
-
-    const checkoutMethod = primaryPackageOrder.delivery_type
-    const checkoutPhone = primaryPackageOrder.phone_number || ''
-    const checkoutDetails = primaryPackageOrder.delivery_address || ''
-    const checkoutAddressLine1 = primaryPackageOrder.address_line_1 || ''
-    const checkoutAddressLine2 = primaryPackageOrder.address_line_2 || ''
-    const checkoutCityArea = primaryPackageOrder.city_area || ''
-    const checkoutLocationSource = primaryPackageOrder.location_source || 'address'
-    const checkoutLatitude = primaryPackageOrder.delivery_latitude ?? null
-    const checkoutLongitude = primaryPackageOrder.delivery_longitude ?? null
-
-      const packageLines = getPendingPackageEntries(packageOrders, mealTypes, weeklyPlan)
-      const itemLines = cartEntries.map(({ item, qty }) => ({
-        name: item.name,
-        qty,
-        subtotal: `Rs. ${(Number(item.price) * qty).toFixed(2)}`,
+  const openCheckoutReview = async ({
+    deliveryType = primaryPackageOrder?.delivery_type || 'takeaway',
+    phoneNumber = primaryPackageOrder?.phone_number || '',
+    detailsText = primaryPackageOrder?.delivery_address || '',
+    addressLine1 = primaryPackageOrder?.address_line_1 || '',
+    addressLine2 = primaryPackageOrder?.address_line_2 || '',
+    cityArea = primaryPackageOrder?.city_area || '',
+    locationSource = primaryPackageOrder?.location_source || 'address',
+    deliveryLatitude = primaryPackageOrder?.delivery_latitude ?? null,
+    deliveryLongitude = primaryPackageOrder?.delivery_longitude ?? null,
+    deliveryFeeLabel: providedDeliveryFeeLabel = '',
+    deliveryFeeValue: providedDeliveryFeeValue = null,
+  } = {}) => {
+    const packageLines = getPendingPackageEntries(packageOrders, mealTypes, weeklyPlan)
+    const itemLines = cartEntries.map(({ item, qty }) => ({
+      name: item.name,
+      qty,
+      subtotal: `Rs. ${(Number(item.price) * qty).toFixed(2)}`,
     }))
+    const hasPackageLines = packageLines.length > 0
+    const hasItemLines = itemLines.length > 0
+    const packageSubtotalValue = packageLines.reduce(
+      (sum, line) => sum + (Number(line.priceValue) || 0) * (Number(line.qty) || 0),
+      0
+    )
+    const itemSubtotalValue = cartEntries.reduce(
+      (sum, entry) => sum + (Number(entry.item?.price) || 0) * (Number(entry.qty) || 0),
+      0
+    )
+    const foodSubtotalValue = packageSubtotalValue + itemSubtotalValue
 
     let deliveryFeeLabel = ''
-    if (checkoutMethod === 'delivery') {
-      setPreparingCombinedReview(true)
-      try {
-        const { data } = await estimateDeliveryFee({
-          delivery_type: 'delivery',
-          has_package: false,
-          address_line_1: checkoutAddressLine1,
-          address_line_2: checkoutAddressLine2,
-          city_area: checkoutCityArea,
-          location_source: checkoutLocationSource,
-          delivery_latitude: checkoutLatitude,
-          delivery_longitude: checkoutLongitude,
-        })
-        deliveryFeeLabel = data?.delivery_fee_label || formatDeliveryFeeLabel(data?.delivery_fee, 'Calculated at checkout')
-      } catch (err) {
-        const message = err.response?.data?.detail || err.message || 'Failed to calculate the delivery fee.'
-        setError(message)
-        showToast(message, 'error')
-        setPreparingCombinedReview(false)
-        return
-      } finally {
-        setPreparingCombinedReview(false)
+    let deliveryFeeNote = ''
+    let deliveryFeeValue = Number(providedDeliveryFeeValue || 0)
+    if (deliveryType === 'delivery') {
+      if (hasPackageLines && !hasItemLines) {
+        deliveryFeeLabel = 'Free (meal package only)'
+        deliveryFeeValue = 0
+        deliveryFeeNote = 'Free delivery applies because this checkout contains only meal packages.'
+      } else {
+        deliveryFeeNote = hasPackageLines
+          ? 'Delivery charges apply because cafe items are included in this combined order.'
+          : 'Delivery charges apply to menu-item orders.'
+
+        if (providedDeliveryFeeLabel) {
+          deliveryFeeLabel = providedDeliveryFeeLabel
+        } else {
+          setPreparingCombinedReview(true)
+          try {
+            const { data } = await estimateDeliveryFee({
+              delivery_type: 'delivery',
+              has_package: false,
+              address_line_1: addressLine1,
+              address_line_2: addressLine2,
+              city_area: cityArea,
+              location_source: locationSource,
+              delivery_latitude: deliveryLatitude,
+              delivery_longitude: deliveryLongitude,
+            })
+            deliveryFeeLabel = data?.delivery_fee_label || formatDeliveryFeeLabel(data?.delivery_fee, 'Calculated at checkout')
+            deliveryFeeValue = Number(data?.delivery_fee || 0)
+          } catch (err) {
+            const message = err.response?.data?.detail || err.message || 'Failed to calculate the delivery fee.'
+            setError(message)
+            showToast(message, 'error')
+            return
+          } finally {
+            setPreparingCombinedReview(false)
+          }
+        }
       }
     }
+    const totalAmountValue = foodSubtotalValue + (deliveryType === 'delivery' ? deliveryFeeValue : 0)
+
+    const title = hasPackageLines && hasItemLines
+      ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + ${packageCount} pkg)`
+      : hasPackageLines
+        ? `Place Order (${packageCount} pkg)`
+        : `Place Order (${cartCount} item${cartCount > 1 ? 's' : ''})`
+    const message = hasPackageLines && hasItemLines
+      ? 'Review your meal packages, cafe items, and order details before placing the order.'
+      : hasPackageLines
+        ? 'Review your meal package details before confirming the order.'
+        : 'Review your cafe items and order details before confirming the order.'
+    const confirmationNote = hasPackageLines && hasItemLines
+      ? `Press confirm to place this combined order with ${packageLines.length} package type${packageLines.length === 1 ? '' : 's'} and ${itemLines.length} cafe item${itemLines.length === 1 ? '' : 's'}.`
+      : hasPackageLines
+        ? `Press confirm to place this meal package order with ${packageLines.length} package type${packageLines.length === 1 ? '' : 's'}.`
+        : `Press confirm to place this cafe order with ${itemLines.length} item${itemLines.length === 1 ? '' : 's'}.`
 
     setCombinedOrderReview({
-      title: cartCount > 0
-        ? `Place Combined Order (${cartCount} item${cartCount > 1 ? 's' : ''} + ${packageCount} pkg)`
-        : `Place Order (${packageCount} pkg)`,
-      message: 'Review your meal packages, cafe items, and delivery details before placing the order.',
-      method: checkoutMethod,
-      deliveryAddress: checkoutMethod === 'delivery' ? checkoutDetails : '',
-      pickupDetails: checkoutMethod === 'takeaway' ? checkoutDetails : '',
-      phoneNumber: checkoutPhone,
+      title,
+      message,
+      method: deliveryType,
+      deliveryAddress: deliveryType === 'delivery' ? detailsText : '',
+      pickupDetails: deliveryType === 'takeaway' ? detailsText : '',
+      phoneNumber,
+      foodSubtotalLabel: `LKR ${foodSubtotalValue.toFixed(2)}`,
       deliveryFeeLabel,
+      deliveryFeeValue,
+      totalAmountLabel: `LKR ${totalAmountValue.toFixed(2)}`,
+      deliveryFeeNote,
+      confirmationNote,
       packageLines,
       itemLines,
+      checkoutPayload: {
+        deliveryType,
+        phoneNumber,
+        detailsText,
+        addressLine1,
+        addressLine2,
+        cityArea,
+        locationSource,
+        deliveryLatitude,
+        deliveryLongitude,
+      },
     })
   }
 
   const confirmCombinedOrder = async () => {
+    const checkoutPayload = combinedOrderReview?.checkoutPayload
+    if (checkoutPayload) {
+      await submitCartOrder(checkoutPayload)
+      return
+    }
     if (!primaryPackageOrder) return
     await submitCartOrder({
       deliveryType: primaryPackageOrder.delivery_type,
@@ -4331,25 +5391,25 @@ function MenuItemsPanel({
       setError('Your cart is empty.')
       return
     }
-    if (!isMenuItemOrderOpen()) {
+    if (cartEntries.length > 0 && !isMenuItemOrderOpen()) {
       showShopClosedPopup()
       return
     }
 
     if (hasPendingPackageOrder) {
-      await openCombinedOrderReview()
+      await openCheckoutReview()
       return
     }
 
     setShowOrderMethod(true)
   }
 
-  const scrollToCategory = (catName) => {
-    categoryRefs.current[catName]?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start',
-    })
-  }
+  useEffect(() => {
+    if (!embedded || embeddedCheckoutRequestToken === 0) return
+    if (embeddedCheckoutRequestToken === lastEmbeddedCheckoutTokenRef.current) return
+    lastEmbeddedCheckoutTokenRef.current = embeddedCheckoutRequestToken
+    void handlePlaceOrder()
+  }, [embedded, embeddedCheckoutRequestToken, handlePlaceOrder])
 
   const renderCartPanel = ({ mobile = false } = {}) => (
       <div className={`sd-cart-inner${mobile ? ' sd-cart-inner-mobile' : ''}`}>
@@ -4482,18 +5542,19 @@ function MenuItemsPanel({
 
   return (
     <>
-      <div className={`sd-panel sd-menu-panel${showFloatingCartBar ? ' has-mobile-cart' : ''}`}>
+      <div className={`sd-panel sd-menu-panel${embedded ? ' sd-menu-panel-embedded' : ''}${showFloatingCartBar ? ' has-mobile-cart' : ''}`}>
         <div className="sd-panel-header">
           <div>
-            <h2 className="sd-panel-title">Menu Items</h2>
-            <p className="sd-panel-subtitle">Browse menu items for {activeMenuDateLabel} and add them to your cart</p>
+            <h2 className="sd-panel-title">{headerTitle}</h2>
+            <p className="sd-panel-subtitle">
+              {headerSubtitle || `Browse menu items for ${activeMenuDateLabel} and add them to your cart`}
+            </p>
             <p className={menuOrderingOpen ? 'sd-input-hint' : 'sd-input-hint warning'}>
               {menuOrderingOpen
                 ? MENU_ITEM_ORDER_HOURS_MESSAGE
                 : 'Menu item ordering is closed now. Orders are available from 4:00 AM to 11:30 PM.'}
             </p>
           </div>
-
         </div>
 
         {hasPendingPackageOrder && (
@@ -4514,10 +5575,10 @@ function MenuItemsPanel({
             <Package2 size={18} strokeWidth={2.2} />
             <span>
               <strong>{packageOrders.length} meal package{packageOrders.length === 1 ? '' : 's'} ready.</strong>{' '}
-              Add menu items below and place the combined order with the same {primaryPackageOrder.delivery_type} details you already confirmed.
+              Add cafe items below if you want to combine them with this checkout.
               {primaryPackageOrder.delivery_type === 'delivery'
-                ? ' Standard delivery charges will apply once cafe items are added.'
-                : ''}
+                ? ' Free delivery applies only to meal-package-only orders, so delivery charges will apply once cafe items are added.'
+                : ' Cafe items will be added to the same takeaway order.'}
             </span>
           </div>
         )}
@@ -4545,49 +5606,37 @@ function MenuItemsPanel({
           />
         </div>
 
-        {!loadingItems && categories.length > 0 && (
-          <div className="sd-category-shortcuts" aria-label="Menu categories">
-            {categories.map(([catName, items]) => (
-              <button
-                key={catName}
-                type="button"
-                className="sd-category-chip"
-                onClick={() => scrollToCategory(catName)}
-              >
-                <span>{catName}</span>
-                <span className="sd-category-chip-count">{items.length}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
         <div className="sd-menu-layout">
           <div className="sd-items-col">
             {loadingItems ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
                 <Spinner />
               </div>
-            ) : categories.length === 0 ? (
+            ) : menuSections.length === 0 ? (
               <EmptyState message="No menu items available right now." />
             ) : (
-              categories.map(([catName, items]) => (
+              menuSections.map((section) => (
                 <div
-                  key={catName}
-                  ref={(el) => {
-                    if (el) categoryRefs.current[catName] = el
-                  }}
-                  className="sd-cat-section"
+                  key={section.key}
+                  id={`student-menu-group-${section.key}`}
+                  className="sd-cat-section sd-scroll-anchor"
                 >
-                  <p className="sd-cat-label">{catName}</p>
+                  <p className="sd-cat-label sd-cat-label-friendly">{section.label}</p>
                   <div className="sd-items-grid">
-                    {items.map((item) => {
-                      const inCart = !!cart[item.id]
-                      const inCartQty = cart[item.id]?.qty ?? 0
+                    {section.items.map((item) => {
+                      const hasVariants = hasStudentVariantChoices(item)
+                      const baseCartKey = getStudentCartLineKey(item)
+                      const inCart = hasVariants
+                        ? getStudentItemCartQuantity(cart, item) > 0
+                        : !!cart[baseCartKey]
+                      const inCartQty = hasVariants
+                        ? getStudentItemCartQuantity(cart, item)
+                        : cart[baseCartKey]?.qty ?? 0
                       return (
                         <div
                           key={item.id}
                           className={inCart ? 'sd-item-card in-cart' : 'sd-item-card'}
-                          onClick={() => openItemDetails(item)}
+                          onClick={embedded || !hasVariants ? undefined : () => openItemDetails(item)}
                         >
                           {item.image_url ? (
                             <img src={item.image_url} alt={item.name} className="sd-item-img" />
@@ -4606,26 +5655,49 @@ function MenuItemsPanel({
                             <p className="sd-item-price">Rs. {Number(item.price).toFixed(2)}</p>
                           </div>
 
-                          <button
-                            className={inCart ? 'sd-add-btn in-cart' : 'sd-add-btn'}
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              openItemDetails(item)
-                            }}
-                          >
-                            {inCart ? (
-                              <>
-                                <CheckCircle2 size={16} strokeWidth={2.2} />
-                                <span>In Cart ({inCartQty})</span>
-                              </>
-                            ) : (
-                              <>
-                                <Search size={16} strokeWidth={2.2} />
-                                <span>View Details</span>
-                              </>
-                            )}
-                          </button>
+                          {embedded && inCart && !hasVariants ? (
+                            <div className="sd-item-card-controls" onClick={(e) => e.stopPropagation()}>
+                              <div className="sd-cart-qty-controls">
+                                <button type="button" className="sd-cart-qty-btn" onClick={() => decreaseQty(cart[baseCartKey].item)}>
+                                  <Minus size={14} strokeWidth={2.4} />
+                                </button>
+                                <span className="sd-cart-qty-num">{inCartQty}</span>
+                                <button type="button" className="sd-cart-qty-btn" onClick={() => increaseQty(cart[baseCartKey].item)}>
+                                  <Plus size={14} strokeWidth={2.4} />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              className={inCart ? 'sd-add-btn in-cart' : 'sd-add-btn'}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (hasVariants) {
+                                  openItemDetails(item)
+                                  return
+                                }
+                                addBaseMenuItemToCart(item, 1)
+                              }}
+                            >
+                              {hasVariants ? (
+                                <>
+                                  <ShoppingCart size={16} strokeWidth={2.2} />
+                                  <span>{inCartQty > 0 ? `View Item (${inCartQty})` : 'View Item'}</span>
+                                </>
+                              ) : inCart ? (
+                                <>
+                                  <CheckCircle2 size={16} strokeWidth={2.2} />
+                                  <span>Add to Cart ({inCartQty})</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Plus size={16} strokeWidth={2.2} />
+                                  <span>Add to Cart</span>
+                                </>
+                              )}
+                            </button>
+                          )}
                         </div>
                       )
                     })}
@@ -4635,13 +5707,15 @@ function MenuItemsPanel({
             )}
           </div>
 
-          <div className="sd-cart sd-cart-desktop">
-            {renderCartPanel()}
-          </div>
+          {!embedded && (
+            <div className="sd-cart sd-cart-desktop">
+              {renderCartPanel()}
+            </div>
+          )}
         </div>
       </div>
 
-      {showFloatingCartBar && (
+      {!suppressEmbeddedMobileCart && (showFloatingCartBar || (embedded && (cartEntries.length > 0 || hasPendingPackageOrder) && !showMobileCart && !selectedItem && !showOrderMethod && !showDelivery && !showTakeaway)) && (
         <button type="button" className="sd-mobile-cart-bar" onClick={() => setShowMobileCart(true)}>
           <span className="sd-mobile-cart-bar-main">
             <span className="sd-mobile-cart-bar-title">
@@ -4654,7 +5728,7 @@ function MenuItemsPanel({
         </button>
       )}
 
-      {showMobileCart && createPortal(
+      {!suppressEmbeddedMobileCart && showMobileCart && createPortal(
         <div className="sd-mobile-cart-overlay" onClick={() => setShowMobileCart(false)}>
           <div className="sd-mobile-cart-sheet" onClick={(e) => e.stopPropagation()}>
             {renderCartPanel({ mobile: true })}
@@ -4681,15 +5755,15 @@ function MenuItemsPanel({
         <DeliveryModal
           showQuantity={false}
           title="Delivery Details"
-          subtitle="Enter your delivery address and phone number. We will calculate the delivery charge automatically."
-          confirmLabel="Confirm Order"
+          subtitle=""
+          confirmLabel="Review Order"
           allowCurrentLocation
           requireFeeEstimate={true}
           autoEstimateFee
           onCancel={() => setShowDelivery(false)}
-          onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude }) => {
+          onConfirm={({ delivery_address, phone_number, address_line_1, address_line_2, city_area, location_source, delivery_latitude, delivery_longitude, delivery_fee_label, delivery_fee_value }) => {
             setShowDelivery(false)
-            submitCartOrder({
+            void openCheckoutReview({
               deliveryType: 'delivery',
               phoneNumber: phone_number,
               detailsText: delivery_address,
@@ -4699,6 +5773,8 @@ function MenuItemsPanel({
               locationSource: location_source,
               deliveryLatitude: delivery_latitude,
               deliveryLongitude: delivery_longitude,
+              deliveryFeeLabel: delivery_fee_label,
+              deliveryFeeValue: delivery_fee_value,
             })
           }}
         />
@@ -4711,11 +5787,11 @@ function MenuItemsPanel({
           subtitle="Add your contact details before confirming these menu items for pickup."
           noteLabel="Pickup Details (Optional)"
           notePlaceholder="Example: Pickup person name - Nimal, contact - 0771234567"
-          confirmLabel="Confirm Order"
+          confirmLabel="Review Order"
           onCancel={() => setShowTakeaway(false)}
           onConfirm={({ phone_number, pickup_note }) => {
             setShowTakeaway(false)
-            submitCartOrder({
+            void openCheckoutReview({
               deliveryType: 'takeaway',
               phoneNumber: phone_number,
               detailsText: pickup_note,
@@ -4741,8 +5817,21 @@ function MenuItemsPanel({
           item={selectedItem}
           initialQty={1}
           onClose={closeItemDetails}
+          getVariantQty={getVariantQty}
+          onAddVariant={(item, variant) => addVariantToCart(item, variant, 1)}
+          onDecreaseVariant={(item, variant) => {
+            const cartKey = getStudentCartLineKey(item, variant)
+            const lineQty = cart[cartKey]?.qty ?? 0
+            if (lineQty > 1) {
+              decreaseQty(cart[cartKey].item)
+              return
+            }
+            if (lineQty === 1) {
+              setPendingRemoveItem(cart[cartKey].item)
+            }
+          }}
           onAdd={(item, qty) => {
-            addToCart(item, qty)
+            addBaseMenuItemToCart(item, qty)
             closeItemDetails()
           }}
         />
@@ -4811,8 +5900,9 @@ function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
   const [clearing, setClearing] = useState(false)
   const [cancellingKey, setCancellingKey] = useState('')
   const [selectedHistory, setSelectedHistory] = useState(null)
+  const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false)
 
-  useBodyScrollLock(Boolean(selectedHistory))
+  useBodyScrollLock(Boolean(selectedHistory) || showClearHistoryConfirm)
 
   const sessionRows = useMemo(() => {
     const statusPriority = ['pending', 'confirmed', 'cancelled']
@@ -4914,16 +6004,21 @@ function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
       .sort((a, b) => b.createdAtTs - a.createdAtTs)
   }, [orders])
 
-  const handleClear = async () => {
-    if (!window.confirm('Are you sure you want to delete all your order history? This cannot be undone.')) return
+  const confirmClearHistory = async () => {
     setClearing(true)
     try {
       await clearOrderHistory()
       setSelectedHistory(null)
+      setShowClearHistoryConfirm(false)
       onClear()
     } finally {
       setClearing(false)
     }
+  }
+
+  const handleClear = () => {
+    if (clearing) return
+    setShowClearHistoryConfirm(true)
   }
 
   const handleCancelOrder = async (row, event) => {
@@ -5151,13 +6246,70 @@ function OrderHistoryPanel({ orders, loading, onClear, showToast }) {
         </div>,
         document.body
       )}
+
+      {showClearHistoryConfirm && (
+        <ConfirmDialog
+          title="Clear order history?"
+          message="Are you sure you want to delete all your order history? This cannot be undone."
+          confirmLabel={clearing ? 'Clearing...' : 'Yes, Clear'}
+          cancelLabel="No, Keep"
+          onConfirm={confirmClearHistory}
+          onCancel={() => {
+            if (clearing) return
+            setShowClearHistoryConfirm(false)
+          }}
+        />
+      )}
     </div>
   )
 }
 
 // ── Panel 4 - Food Analytics ─────────────────────────────────────────────────
 const DAYS  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const MEALS = ['breakfast', 'dinner', 'lunch']
+const MEALS = ['breakfast', 'lunch', 'dinner']
+
+function getAnalyticsOrderDate(order) {
+  const rawValue = order?.order_date || order?.created_at
+  if (!rawValue) return null
+  const parsed = String(rawValue).includes('T')
+    ? new Date(rawValue)
+    : new Date(`${rawValue}T00:00:00`)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function getAnalyticsSpend(order) {
+  const quantity = Math.max(Number(order?.quantity) || 1, 1)
+  const unitPrice = Number(order?.unit_price)
+  if (Number.isFinite(unitPrice) && unitPrice > 0) return unitPrice * quantity
+
+  const totalAmount = Number(order?.total_amount)
+  return Number.isFinite(totalAmount) && totalAmount > 0 ? totalAmount : 0
+}
+
+function getAnalyticsOrderLabel(order) {
+  if (order?.order_type === 'item') return order?.item_name || order?.package_label || order?.meal_type_name || 'Cafe item'
+  return order?.package_label || order?.meal_type_name || order?.item_name || 'Meal package'
+}
+
+function getAnalyticsMealBucket(order) {
+  const source = `${order?.meal_type_name || ''} ${order?.package_label || ''} ${order?.item_name || ''}`
+    .toLowerCase()
+    .trim()
+
+  if (source.includes('breakfast')) return 'breakfast'
+  if (source.includes('lunch')) return 'lunch'
+  if (source.includes('dinner')) return 'dinner'
+  return ''
+}
+
+function formatAnalyticsMoney(value) {
+  return `Rs. ${Math.round(Number(value) || 0).toLocaleString('en-LK')}`
+}
+
+function formatAnalyticsMealLabel(value) {
+  if (!value) return 'Any time'
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
 
 function generateHabitTags(orders) {
   const tags = []
@@ -5179,24 +6331,27 @@ function generateHabitTags(orders) {
   if (orders.length >= 20) tags.push({ label: 'Loyal Member', color: '#c9a84c', bg: 'rgba(201,168,76,0.15)', border: 'rgba(201,168,76,0.4)' })
 
   const nameFreq = {}
-  items.forEach((o) => { if (o.item_name) nameFreq[o.item_name] = (nameFreq[o.item_name] || 0) + o.quantity })
+  items.forEach((o) => { if (o.item_name) nameFreq[o.item_name] = (nameFreq[o.item_name] || 0) + (Number(o.quantity) || 1) })
   const topItem = Object.entries(nameFreq).sort((a, b) => b[1] - a[1])[0]
   if (topItem && topItem[1] >= 3) tags.push({ label: `Loves ${topItem[0]}`, color: '#be185d', bg: 'rgba(190,24,93,0.08)', border: 'rgba(190,24,93,0.2)' })
 
   return tags
 }
 
-function SummaryCard({ label, value, CardIcon, small }) {
+function SummaryCard({ label, value, CardIcon, helper }) {
   return (
-    <div style={{ background: 'linear-gradient(135deg, #faf6f0, #f5ede0)', border: '1.5px solid #e8d9c5', borderRadius: '14px', padding: '16px 18px' }}>
-      <div style={{ marginBottom: '6px' }}><CardIcon size={20} strokeWidth={2.2} color={T.caramel} /></div>
-      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: small ? '14px' : '22px', fontWeight: 800, color: T.espresso, lineHeight: 1.2, wordBreak: 'break-word' }}>{value}</div>
-      <div style={{ fontSize: '11px', color: T.textMuted, marginTop: '4px', fontWeight: 600 }}>{label}</div>
+    <div className="sd-analytics-stat-card">
+      <div className="sd-analytics-stat-icon">
+        <CardIcon size={18} strokeWidth={2.2} color={T.caramel} />
+      </div>
+      <div className="sd-analytics-stat-value">{value}</div>
+      <div className="sd-analytics-stat-label">{label}</div>
+      {helper && <div className="sd-analytics-stat-helper">{helper}</div>}
     </div>
   )
 }
 
-function FoodAnalyticsPanel({ orders }) {
+function FoodAnalyticsPanelLegacy({ orders }) {
   const confirmed = orders.filter((o) => o.status === 'confirmed')
 
   // ── Summary ──────────────────────────────────────────────────────────────
@@ -5430,6 +6585,371 @@ function FoodAnalyticsPanel({ orders }) {
 }
 
 // ── Panel 5 - Suggestions ─────────────────────────────────────────────────────
+function FoodAnalyticsPanel({ orders }) {
+  const confirmed = orders.filter((o) => o.status === 'confirmed')
+  const analyticsOrders = confirmed.map((order) => {
+    const analyticsDate = getAnalyticsOrderDate(order)
+    return {
+      ...order,
+      analyticsDate,
+      analyticsSpend: getAnalyticsSpend(order),
+      analyticsLabel: getAnalyticsOrderLabel(order),
+      analyticsMeal: getAnalyticsMealBucket(order),
+      analyticsDay: analyticsDate ? DAYS[(analyticsDate.getDay() + 6) % 7] : '',
+      analyticsQuantity: Math.max(Number(order?.quantity) || 1, 1),
+    }
+  })
+
+  const now = new Date()
+  const monthName = now.toLocaleDateString('en-US', { month: 'long' })
+  const startOfToday = new Date(now)
+  startOfToday.setHours(0, 0, 0, 0)
+
+  const last30Start = new Date(startOfToday)
+  last30Start.setDate(last30Start.getDate() - 29)
+
+  const thisWeekStart = new Date(startOfToday)
+  thisWeekStart.setDate(thisWeekStart.getDate() - 6)
+
+  const lastWeekStart = new Date(startOfToday)
+  lastWeekStart.setDate(lastWeekStart.getDate() - 13)
+
+  const sumSpend = (list) => list.reduce((sum, entry) => sum + Number(entry.analyticsSpend || 0), 0)
+
+  const thisMonthOrders = analyticsOrders.filter((entry) => (
+    entry.analyticsDate
+    && entry.analyticsDate.getFullYear() === now.getFullYear()
+    && entry.analyticsDate.getMonth() === now.getMonth()
+  ))
+  const last30Orders = analyticsOrders.filter((entry) => entry.analyticsDate && entry.analyticsDate >= last30Start)
+  const thisWeekOrders = analyticsOrders.filter((entry) => entry.analyticsDate && entry.analyticsDate >= thisWeekStart)
+  const lastWeekOrders = analyticsOrders.filter((entry) => (
+    entry.analyticsDate
+    && entry.analyticsDate >= lastWeekStart
+    && entry.analyticsDate < thisWeekStart
+  ))
+
+  const totalOrders = analyticsOrders.length
+  const totalSpend = sumSpend(analyticsOrders)
+  const thisMonthSpend = sumSpend(thisMonthOrders)
+  const last30Spend = sumSpend(last30Orders)
+  const thisWeekSpend = sumSpend(thisWeekOrders)
+  const lastWeekSpend = sumSpend(lastWeekOrders)
+  const avgSpend = totalOrders > 0 ? totalSpend / totalOrders : 0
+  const thisMonthAverage = thisMonthOrders.length > 0 ? thisMonthSpend / thisMonthOrders.length : 0
+  const weekSpendDelta = thisWeekSpend - lastWeekSpend
+
+  const favoriteCounts = {}
+  analyticsOrders.forEach((entry) => {
+    if (!entry.analyticsLabel) return
+    favoriteCounts[entry.analyticsLabel] = (favoriteCounts[entry.analyticsLabel] || 0) + entry.analyticsQuantity
+  })
+  const topFavorites = Object.entries(favoriteCounts).sort((a, b) => b[1] - a[1]).slice(0, 3)
+  const topFavorite = topFavorites[0]?.[0] || 'No favourite yet'
+  const maxFavoriteCount = Math.max(...topFavorites.map(([, count]) => count), 1)
+
+  const dayCounts = Object.fromEntries(DAYS.map((day) => [day, 0]))
+  analyticsOrders.forEach((entry) => {
+    if (entry.analyticsDay) dayCounts[entry.analyticsDay] += 1
+  })
+  const dayEntries = DAYS.map((day) => [day, dayCounts[day]])
+  const maxDayCount = Math.max(...dayEntries.map(([, count]) => count), 1)
+  const mostActiveDay = dayEntries.reduce((best, current) => (current[1] > best[1] ? current : best), ['', 0])[0] || '-'
+
+  const mealCounts = Object.fromEntries(MEALS.map((meal) => [meal, 0]))
+  analyticsOrders.forEach((entry) => {
+    if (entry.analyticsMeal) mealCounts[entry.analyticsMeal] += 1
+  })
+  const mealEntries = MEALS.map((meal) => [meal, mealCounts[meal]])
+  const maxMealCount = Math.max(...mealEntries.map(([, count]) => count), 1)
+  const usualMeal = mealEntries.reduce((best, current) => (current[1] > best[1] ? current : best), ['', 0])[0] || ''
+
+  const methodCounts = { takeaway: 0, delivery: 0 }
+  analyticsOrders.forEach((entry) => {
+    if (entry.delivery_type === 'delivery') methodCounts.delivery += 1
+    else methodCounts.takeaway += 1
+  })
+  const preferredMethod = methodCounts.delivery > methodCounts.takeaway
+    ? 'Delivery'
+    : methodCounts.takeaway > 0
+      ? 'Takeaway'
+      : '-'
+
+  const activeDays = new Set(
+    analyticsOrders
+      .filter((entry) => entry.analyticsDate)
+      .map((entry) => entry.analyticsDate.toISOString().slice(0, 10))
+  ).size
+  const orderRate = activeDays > 0 ? (totalOrders / activeDays).toFixed(1) : '0.0'
+
+  const insightCards = [
+    {
+      title: `${monthName} at a glance`,
+      body: thisMonthOrders.length > 0
+        ? `You placed ${thisMonthOrders.length} confirmed order${thisMonthOrders.length === 1 ? '' : 's'} and spent ${formatAnalyticsMoney(thisMonthSpend)} this month.`
+        : `No confirmed orders yet in ${monthName}. Your overall order habits are still shown below.`,
+    },
+    {
+      title: 'Your routine',
+      body: mostActiveDay !== '-'
+        ? `${mostActiveDay} is your busiest day${usualMeal ? `, and ${formatAnalyticsMealLabel(usualMeal).toLowerCase()} is your usual order time.` : '.'}`
+        : 'Place a few more confirmed orders to reveal your weekly routine.',
+    },
+    {
+      title: 'How you order',
+      body: preferredMethod !== '-'
+        ? `${preferredMethod} is your preferred method, and ${topFavorite} is the item you come back to the most.`
+        : `Your top pick right now is ${topFavorite}.`,
+    },
+  ]
+
+  const tips = []
+  if (usualMeal) {
+    tips.push(`You usually order ${formatAnalyticsMealLabel(usualMeal).toLowerCase()}. Pre-ordering it on busy days can save time.`)
+  }
+  if (weekSpendDelta > 0) {
+    tips.push(`This week you spent ${formatAnalyticsMoney(weekSpendDelta)} more than last week. Meal packages may be worth checking if this becomes your pattern.`)
+  } else if (weekSpendDelta < 0) {
+    tips.push(`This week you spent ${formatAnalyticsMoney(Math.abs(weekSpendDelta))} less than last week. Your ordering has been lighter recently.`)
+  }
+  if (preferredMethod === 'Takeaway') {
+    tips.push('Takeaway is your usual method. Ordering a little earlier can help you avoid the rush.')
+  } else if (preferredMethod === 'Delivery') {
+    tips.push('Delivery is your usual method. Keeping your saved address updated will make checkout even faster.')
+  }
+
+  const habitTags = generateHabitTags(confirmed)
+
+  if (confirmed.length === 0) {
+    return (
+      <div className="sd-panel">
+        <div className="sd-panel-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 className="sd-panel-title">My Food Analytics</h2>
+            <p className="sd-panel-subtitle">Useful insights will appear here after your confirmed orders start coming in.</p>
+          </div>
+          <TrendingUp size={22} strokeWidth={2.2} color={T.caramel} />
+        </div>
+        <div style={{ textAlign: 'center', padding: '60px 0', color: T.textMuted, fontSize: '13px' }}>
+          <BarChart2 size={40} strokeWidth={1.5} color={T.textLight} style={{ marginBottom: '12px', opacity: 0.4 }} />
+          <p>No confirmed order data yet. Once your meals are confirmed, this page will show your real spending and food habits.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="sd-panel">
+      <div className="sd-panel-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h2 className="sd-panel-title">My Food Analytics</h2>
+          <p className="sd-panel-subtitle">A student-friendly view of your real confirmed orders, spending, and habits.</p>
+        </div>
+        <TrendingUp size={22} strokeWidth={2.2} color={T.caramel} />
+      </div>
+
+      <div className="sd-analytics-intro">
+        <div>
+          <span className="sd-home-kicker">Based on confirmed orders</span>
+          <h3 className="sd-analytics-intro-title">Useful patterns from your real food history</h3>
+          <p className="sd-analytics-intro-copy">
+            {thisMonthOrders.length > 0
+              ? `You already have ${thisMonthOrders.length} confirmed order${thisMonthOrders.length === 1 ? '' : 's'} in ${monthName}.`
+              : `You do not have confirmed orders in ${monthName} yet, so this view mixes your overall history with your latest 30-day activity.`}
+          </p>
+        </div>
+        <div className="sd-analytics-intro-badge">
+          <span>Active days</span>
+          <strong>{activeDays}</strong>
+          <small>{orderRate} orders on active days</small>
+        </div>
+      </div>
+
+      <div className="sd-analytics-stat-grid">
+        <SummaryCard
+          label="Orders This Month"
+          value={thisMonthOrders.length}
+          CardIcon={Package2}
+          helper={thisMonthOrders.length > 0 ? `${thisMonthOrders.length} confirmed` : 'No confirmed orders yet'}
+        />
+        <SummaryCard
+          label="Spent This Month"
+          value={formatAnalyticsMoney(thisMonthSpend)}
+          CardIcon={ShoppingCart}
+          helper={`Last 30 days: ${formatAnalyticsMoney(last30Spend)}`}
+        />
+        <SummaryCard
+          label="Top Pick"
+          value={topFavorite}
+          CardIcon={UtensilsCrossed}
+          helper={topFavorites[0] ? `${topFavorites[0][1]} orders` : 'Keep ordering to reveal it'}
+        />
+        <SummaryCard
+          label="Usual Time"
+          value={usualMeal ? formatAnalyticsMealLabel(usualMeal) : 'Still learning'}
+          CardIcon={Clock3}
+          helper={mostActiveDay !== '-' ? `${mostActiveDay} is your busiest day` : 'Need a few more orders'}
+        />
+      </div>
+
+      <div className="sd-analytics-story-grid">
+        {insightCards.map((item) => (
+          <div key={item.title} className="sd-analytics-story-card">
+            <h4>{item.title}</h4>
+            <p>{item.body}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="sd-analytics-grid">
+        <section className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Top favorites</span>
+            <strong>Your most ordered meals</strong>
+          </div>
+          {topFavorites.length > 0 ? (
+            <div className="sd-analytics-favorites">
+              {topFavorites.map(([name, count], index) => (
+                <div key={name} className="sd-analytics-favorite-row">
+                  <div className="sd-analytics-rank">#{index + 1}</div>
+                  <div className="sd-analytics-favorite-copy">
+                    <div className="sd-analytics-favorite-topline">
+                      <span>{name}</span>
+                      <strong>{count}x</strong>
+                    </div>
+                    <div className="sd-analytics-bar-track">
+                      <div className="sd-analytics-bar-fill" style={{ width: `${(count / maxFavoriteCount) * 100}%` }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="sd-analytics-empty-copy">Your favourites will appear once you have a few confirmed orders.</p>
+          )}
+        </section>
+
+        <section className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Spending snapshot</span>
+            <strong>Recent spending using real order totals</strong>
+          </div>
+          <div className="sd-analytics-spend-grid">
+            <div className="sd-analytics-mini-stat">
+              <span>This week</span>
+              <strong>{formatAnalyticsMoney(thisWeekSpend)}</strong>
+            </div>
+            <div className="sd-analytics-mini-stat">
+              <span>Last week</span>
+              <strong>{formatAnalyticsMoney(lastWeekSpend)}</strong>
+            </div>
+            <div className="sd-analytics-mini-stat">
+              <span>Average / order</span>
+              <strong>{formatAnalyticsMoney(thisMonthOrders.length > 0 ? thisMonthAverage : avgSpend)}</strong>
+            </div>
+          </div>
+          <div className="sd-analytics-highlight">
+            <span className="sd-analytics-highlight-label">Weekly trend</span>
+            <strong>
+              {weekSpendDelta > 0
+                ? `${formatAnalyticsMoney(weekSpendDelta)} more than last week`
+                : weekSpendDelta < 0
+                  ? `${formatAnalyticsMoney(Math.abs(weekSpendDelta))} less than last week`
+                  : 'The same as last week'}
+            </strong>
+            <p>
+              {thisWeekOrders.length > 0
+                ? `${thisWeekOrders.length} confirmed order${thisWeekOrders.length === 1 ? '' : 's'} this week.`
+                : 'No confirmed orders recorded this week.'}
+            </p>
+          </div>
+        </section>
+      </div>
+
+      <div className="sd-analytics-grid">
+        <section className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Ordering rhythm</span>
+            <strong>Which days are busiest for you</strong>
+          </div>
+          <div className="sd-analytics-pattern-list">
+            {dayEntries.map(([day, count]) => (
+              <div key={day} className="sd-analytics-pattern-row">
+                <span className="sd-analytics-pattern-label">{day}</span>
+                <div className="sd-analytics-bar-track">
+                  <div className="sd-analytics-bar-fill muted" style={{ width: `${count > 0 ? (count / maxDayCount) * 100 : 0}%` }} />
+                </div>
+                <strong className="sd-analytics-pattern-value">{count}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Meal patterns</span>
+            <strong>Your usual time and method</strong>
+          </div>
+          <div className="sd-analytics-pattern-list">
+            {mealEntries.map(([meal, count]) => (
+              <div key={meal} className="sd-analytics-pattern-row">
+                <span className="sd-analytics-pattern-label">{formatAnalyticsMealLabel(meal)}</span>
+                <div className="sd-analytics-bar-track">
+                  <div className="sd-analytics-bar-fill" style={{ width: `${count > 0 ? (count / maxMealCount) * 100 : 0}%` }} />
+                </div>
+                <strong className="sd-analytics-pattern-value">{count}</strong>
+              </div>
+            ))}
+          </div>
+          <div className="sd-analytics-method-strip">
+            <div className="sd-analytics-method-pill">
+              <Truck size={14} strokeWidth={2.1} />
+              <span>Delivery: {methodCounts.delivery}</span>
+            </div>
+            <div className="sd-analytics-method-pill">
+              <Coffee size={14} strokeWidth={2.1} />
+              <span>Takeaway: {methodCounts.takeaway}</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {tips.length > 0 && (
+        <div className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Helpful for you</span>
+            <strong>Suggestions based on your own pattern</strong>
+          </div>
+          <div className="sd-analytics-tip-list">
+            {tips.slice(0, 3).map((tip) => (
+              <div key={tip} className="sd-analytics-tip">
+                <CheckCircle2 size={16} strokeWidth={2.1} />
+                <span>{tip}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {habitTags.length > 0 && (
+        <div className="sd-analytics-card">
+          <div className="sd-analytics-card-head">
+            <span className="sd-analytics-card-kicker">Your style</span>
+            <strong>What your habits say about you</strong>
+          </div>
+          <div className="sd-analytics-tag-list">
+            {habitTags.map(({ label, color, bg, border }) => (
+              <span key={label} className="sd-analytics-tag" style={{ background: bg, color, borderColor: border }}>
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SuggestionsPanel({ showToast }) {
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -5731,8 +7251,7 @@ function AboutCafeLushPanel() {
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 const TABS = [
-  { key: 'packages',    label: 'Meal Packages',    Icon: Package2   },
-  { key: 'menu',        label: 'Menu Items',        Icon: BookOpen   },
+  { key: 'packages',    label: 'Meal Ordering',     Icon: Package2   },
   { key: 'history',     label: 'Order History',     Icon: History    },
   { key: 'analytics',   label: 'My Food Analytics', Icon: BarChart2  },
   { key: 'suggestions', label: 'Suggestions',       Icon: MessageSquare },
@@ -5811,31 +7330,75 @@ function formatNotificationCard(notification) {
   }
 }
 
+function formatNotificationAmount(value) {
+  const amount = Number(value)
+  return Number.isFinite(amount) ? `Rs. ${amount.toFixed(2)}` : '-'
+}
+
+function hasNotificationValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function humanizeNotificationValue(value) {
+  if (!hasNotificationValue(value)) return '-'
+  return String(value)
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 function NotificationDetailModal({ notification, onClose, onDelete }) {
   useBodyScrollLock()
 
   const card = formatNotificationCard(notification)
   const detail = notification.order_detail
+  const [showFullDetails, setShowFullDetails] = useState(false)
   const deliveryLabel = detail?.delivery_type === 'delivery' ? 'Delivery' : 'Takeaway'
   const fee = Number(detail?.delivery_fee || 0)
-  const unitPrice = Number(detail?.unit_price || 0)
+  const subtotalAmount = Number(detail?.subtotal_amount || 0)
+  const totalAmount = Number(detail?.total_amount || 0)
+  const sessionLines = Array.isArray(detail?.session_lines) ? detail.session_lines : []
+  const quantityValue = Number(
+    detail?.total_quantity ||
+    detail?.quantity ||
+    sessionLines.reduce((sum, line) => sum + Number(line.quantity || 0), 0) ||
+    1
+  )
+  const itemTitle = detail?.label || detail?.name || sessionLines[0]?.label || 'Your order'
+  const statusLabel = humanizeNotificationValue(detail?.status || card.title.replace(/^Order\s+/i, ''))
+  const readyTimeLabel = detail?.pickup_time || (detail?.delivery_type === 'delivery' ? 'Delivery time shared soon' : 'Ready soon')
+  const summaryMessage = detail
+    ? card.title === 'Order Ready'
+      ? detail.delivery_type === 'delivery'
+        ? 'Your order is ready for delivery.'
+        : `Your order is ready for pickup${hasNotificationValue(detail.pickup_time) ? ` at ${detail.pickup_time}` : ''}.`
+      : detail.delivery_type === 'delivery'
+        ? 'Your order is confirmed and will be delivered soon.'
+        : `Your order is confirmed and will be ready${hasNotificationValue(detail.pickup_time) ? ` by ${detail.pickup_time}` : ' soon'}.`
+    : notification.message
 
-  const rows = detail ? [
-    ['Order Ref', detail.order_reference || '-'],
-    ['Bill No', detail.bill_number || 'Not generated yet'],
-    ['Status', detail.status || '-'],
-    ['Type', detail.order_kind || detail.order_type || '-'],
-    ['Item / Package', detail.label || detail.name || '-'],
-    ['Quantity', detail.quantity || 1],
-    ['Order Date', detail.order_date || '-'],
+  const primaryFacts = detail ? [
+    ['Order No', detail.order_reference || '-'],
     ['Method', deliveryLabel],
-    ['Ready Time', detail.pickup_time || (detail.delivery_type === 'delivery' ? 'Delivery time' : 'Ready soon')],
+    ['Order Date', detail.order_date || '-'],
+    ['Ready Time', readyTimeLabel],
+  ] : []
+
+  const fullDetailRows = detail ? [
+    ['Bill No', detail.bill_number || 'Not generated yet'],
+    ['Status', statusLabel],
+    ['Type', humanizeNotificationValue(detail.order_kind || detail.order_type)],
     ['Address / Note', detail.delivery_address || '-'],
     ['Phone', detail.phone_number || '-'],
     ['Email', detail.student_email || '-'],
-    ['Unit Price', `Rs. ${unitPrice.toFixed(2)}`],
-    ['Delivery Fee', `Rs. ${fee.toFixed(2)}`],
+    ['Delivery Fee', formatNotificationAmount(fee)],
+    ['Food Total', detail.subtotal_amount !== '' ? formatNotificationAmount(subtotalAmount) : '-'],
   ] : []
+
+  if (detail?.total_amount !== '') {
+    fullDetailRows.push(['Total Amount', formatNotificationAmount(totalAmount)])
+  }
 
   return createPortal(
     <div className="sd-notif-modal-backdrop" onClick={onClose}>
@@ -5850,17 +7413,85 @@ function NotificationDetailModal({ notification, onClose, onDelete }) {
           </button>
         </div>
 
-        <p className="sd-notif-modal-message">{notification.message}</p>
+        <div className="sd-notif-summary">
+          <div className="sd-notif-summary-copy">
+            <span className="sd-notif-status-badge">{statusLabel}</span>
+            <h3 className="sd-notif-summary-title">
+              {itemTitle}
+              {quantityValue > 1 ? ` x${quantityValue}` : ''}
+            </h3>
+            <p className="sd-notif-summary-text">{summaryMessage}</p>
+          </div>
+          {detail?.total_amount !== '' && (
+            <div className="sd-notif-total">
+              <span className="sd-notif-total-label">Total</span>
+              <strong className="sd-notif-total-value">{formatNotificationAmount(totalAmount)}</strong>
+            </div>
+          )}
+        </div>
 
         {detail && (
-          <div className="sd-notif-detail-grid">
-            {rows.map(([label, value]) => (
-              <div key={label} className="sd-notif-detail-row">
-                <span>{label}</span>
-                <strong>{value}</strong>
+          <>
+            <div className="sd-notif-meta-strip">
+              <span className="sd-notif-chip">{deliveryLabel}</span>
+              {quantityValue > 0 && (
+                <span className="sd-notif-chip">
+                  {quantityValue} item{quantityValue === 1 ? '' : 's'}
+                </span>
+              )}
+              <span className="sd-notif-chip">{readyTimeLabel}</span>
+            </div>
+
+            <div className="sd-notif-section">
+              <div className="sd-notif-section-title">Order summary</div>
+              <div className="sd-notif-fact-list">
+                {primaryFacts.map(([label, value]) => (
+                  <div key={label} className="sd-notif-fact">
+                    <span className="sd-notif-fact-label">{label}</span>
+                    <strong className="sd-notif-fact-value">{value}</strong>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+
+            {sessionLines.length > 0 && (
+              <div className="sd-notif-section sd-notif-lines-card">
+                <div className="sd-notif-section-title">Order items</div>
+                <div className="sd-notif-lines-list">
+                  {sessionLines.map((line, index) => (
+                    <div key={`${line.id || line.label}-${index}`} className="sd-notif-line">
+                      <div>
+                        <strong>{line.label}</strong>
+                        <span>{line.kind}</span>
+                      </div>
+                      <em>x{line.quantity || 0}</em>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="sd-notif-section">
+              <button
+                type="button"
+                className="sd-notif-toggle"
+                onClick={() => setShowFullDetails((prev) => !prev)}
+              >
+                {showFullDetails ? 'Hide full details' : 'View full details'}
+              </button>
+
+              {showFullDetails && (
+                <div className="sd-notif-secondary-list">
+                  {fullDetailRows.map(([label, value]) => (
+                    <div key={label} className="sd-notif-fact">
+                      <span className="sd-notif-fact-label">{label}</span>
+                      <strong className="sd-notif-fact-value">{value}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
         <div className="sd-notif-modal-foot">
@@ -5878,6 +7509,8 @@ function NotificationDetailModal({ notification, onClose, onDelete }) {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function StudentDashboard() {
   const { user, setUser, logout } = useAuth()
+  const cartDraftStorageKey = useMemo(() => getStudentCartDraftStorageKey(user), [user])
+  const initialCartDraft = useMemo(() => readStudentCartDraft(cartDraftStorageKey), [cartDraftStorageKey])
   const [activeTab, setActiveTab] = useState('packages')
   const [showNotifs, setShowNotifs] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
@@ -5888,9 +7521,10 @@ export default function StudentDashboard() {
   const [orderSuccess, setOrderSuccess] = useState(null)
   const [toast, setToast] = useState(null)
   const [showMobileSidebar, setShowMobileSidebar] = useState(false)
+  const [showMobileSharedCart, setShowMobileSharedCart] = useState(false)
   const [notificationConfirm, setNotificationConfirm] = useState(null)
 
-  useBodyScrollLock(showMobileSidebar)
+  useBodyScrollLock(showMobileSidebar || showMobileSharedCart)
 
   const showToast = (message, type = 'success') => setToast({ message, type })
 
@@ -6041,6 +7675,7 @@ export default function StudentDashboard() {
 
   const { data: mealTypes = [], loading: loadingTypes } = useApi(getMealTypes)
   const { data: orders = [], loading: loadingOrders, refetch: refetchOrders } = useApi(getMealOrders)
+  const { data: studentMenuItems = [] } = useApi(getStudentItems)
   const orderSessionCount = useMemo(() => {
     const keys = new Set()
     orders.forEach((o) => keys.add(o.session_id || `single-${o.id}`))
@@ -6049,13 +7684,104 @@ export default function StudentDashboard() {
 
   const [weeklyPlan, setWeeklyPlan] = useState({})
   const [mobileMenuCartVisible, setMobileMenuCartVisible] = useState(false)
-  const [pendingPackageOrder, setPendingPackageOrder] = useState(null)
+  const [savedSelectedDate, setSavedSelectedDate] = useState(() => initialCartDraft.selectedDate || toInputDate(new Date()))
+  const [savedPackageCart, setSavedPackageCart] = useState(() => initialCartDraft.packageCart || {})
+  const [pendingPackageOrder, setPendingPackageOrder] = useState(() => initialCartDraft.pendingPackageOrder ?? null)
+  const [menuCart, setMenuCart] = useState(() => initialCartDraft.menuCart || {})
+  const [cartDraftSyncToken, setCartDraftSyncToken] = useState(0)
+  const [pendingEmbeddedCheckoutMode, setPendingEmbeddedCheckoutMode] = useState(null)
+  const [embeddedCheckoutRequestToken, setEmbeddedCheckoutRequestToken] = useState(0)
+  const [sharedCartSnapshot, setSharedCartSnapshot] = useState({
+    selectedDateLabel: '',
+    summaryPackageEntries: [],
+    summaryMenuEntries: [],
+    summaryTotal: 0,
+    cartError: '',
+    hasSummaryItems: false,
+  })
+  const [activeOrderShortcut, setActiveOrderShortcut] = useState('all')
+  const menuExtrasRef = useRef(null)
+  const sharedCartActionRef = useRef(null)
+  const pendingPackageCount = normalizePackagePayloads(pendingPackageOrder).length
+  const isMenuShortcutActive = activeOrderShortcut !== 'all' && activeOrderShortcut !== 'meal-packages'
+  const mealPackagesPanelOrder = isMenuShortcutActive ? 2 : 1
+  const menuItemsPanelOrder = isMenuShortcutActive ? 1 : 2
+  const orderShortcuts = useMemo(() => {
+    const menuSections = buildStudentMenuSections(studentMenuItems, 'all', '')
+    return [
+      ...BASE_ORDER_SHORTCUTS,
+      ...menuSections.map((section) => ({
+        key: section.key,
+        label: section.label,
+      })),
+    ]
+  }, [studentMenuItems])
+  const handleSharedCartSnapshotChange = useCallback((nextSnapshot) => {
+    setSharedCartSnapshot((prevSnapshot) => (
+      areSharedCartSnapshotsEqual(prevSnapshot, nextSnapshot) ? prevSnapshot : nextSnapshot
+    ))
+  }, [])
+  const handlePackageDraftStateChange = useCallback(({ selectedDate, packageCart }) => {
+    setSavedSelectedDate((prev) => (prev === selectedDate ? prev : selectedDate))
+    setSavedPackageCart((prev) => {
+      const prevSerialized = JSON.stringify(prev || {})
+      const nextSerialized = JSON.stringify(packageCart || {})
+      return prevSerialized === nextSerialized ? prev : (packageCart || {})
+    })
+  }, [])
+  const sharedCartItemCount = useMemo(() => (
+    (sharedCartSnapshot.summaryPackageEntries || []).reduce((sum, entry) => sum + Number(entry.quantity || entry.qty || 0), 0)
+    + (sharedCartSnapshot.summaryMenuEntries || []).reduce((sum, entry) => sum + Number(entry.qty || 0), 0)
+  ), [sharedCartSnapshot.summaryMenuEntries, sharedCartSnapshot.summaryPackageEntries])
+  const showMobileSharedCartBar = activeTab === 'packages'
+    && sharedCartSnapshot.hasSummaryItems
+    && !showMobileSidebar
+    && !showMobileSharedCart
 
   const selectTab = useCallback((key) => {
     setActiveTab(key)
     setShowMobileSidebar(false)
-    if (key !== 'menu') setMobileMenuCartVisible(false)
+    setShowMobileSharedCart(false)
+    if (key !== 'packages') setMobileMenuCartVisible(false)
   }, [])
+
+  useEffect(() => {
+    if (sharedCartSnapshot.hasSummaryItems || !showMobileSharedCart) return
+    setShowMobileSharedCart(false)
+  }, [sharedCartSnapshot.hasSummaryItems, showMobileSharedCart])
+
+  useEffect(() => {
+    const nextDraft = readStudentCartDraft(cartDraftStorageKey)
+    setSavedSelectedDate(nextDraft.selectedDate || toInputDate(new Date()))
+    setSavedPackageCart(nextDraft.packageCart || {})
+    setPendingPackageOrder(nextDraft.pendingPackageOrder ?? null)
+    setMenuCart(nextDraft.menuCart || {})
+    setCartDraftSyncToken((prev) => prev + 1)
+  }, [cartDraftStorageKey])
+
+  useEffect(() => {
+    if (activeOrderShortcut === 'all' || activeOrderShortcut === 'meal-packages') return
+    if (orderShortcuts.some((shortcut) => shortcut.key === activeOrderShortcut)) return
+    setActiveOrderShortcut('all')
+  }, [activeOrderShortcut, orderShortcuts])
+
+  useEffect(() => {
+    const hasPackageCart = Object.values(savedPackageCart || {}).some((entry) => Number(entry?.quantity || entry?.qty || 0) > 0)
+    const hasPendingPackages = normalizePackagePayloads(pendingPackageOrder).length > 0
+    const hasMenuCart = Object.values(menuCart || {}).some((entry) => Number(entry?.qty || 0) > 0)
+
+    if (!hasPackageCart && !hasPendingPackages && !hasMenuCart) {
+      removeStudentCartDraft(cartDraftStorageKey)
+      return
+    }
+
+    writeStudentCartDraft(cartDraftStorageKey, {
+      selectedDate: savedSelectedDate,
+      packageCart: savedPackageCart,
+      pendingPackageOrder,
+      menuCart,
+    })
+  }, [cartDraftStorageKey, menuCart, pendingPackageOrder, savedPackageCart, savedSelectedDate])
 
   const fetchWeeklyPlan = useCallback(async () => {
     try {
@@ -6083,6 +7809,7 @@ export default function StudentDashboard() {
 
   const handleLogoutClick = () => {
     setShowMobileSidebar(false)
+    removeStudentCartDraft(cartDraftStorageKey)
     logout()
   }
 
@@ -6104,7 +7831,6 @@ export default function StudentDashboard() {
           />
           <div>
             <div className="sd-brand-name">Cafe Lush</div>
-            <div className="sd-brand-sub">Student Portal</div>
           </div>
         </div>
       </div>
@@ -6115,7 +7841,6 @@ export default function StudentDashboard() {
         </div>
         <div>
           <div className="sd-username">{user?.username}</div>
-          <div className="sd-userrole">Student</div>
         </div>
       </div>
 
@@ -6133,17 +7858,17 @@ export default function StudentDashboard() {
             >
               <TabIcon size={16} strokeWidth={2.2} />
               <span>{label}</span>
-              {key === 'menu' && pendingPackageOrder && (
+              {key === 'packages' && pendingPackageCount > 0 && (
                 <span className="sd-nav-badge" style={{ background: '#3D6B38', marginLeft: 'auto' }}>
-                  +pkg
+                  Active
                 </span>
               )}
-              {key === 'history' && orderSessionCount > 0 && !pendingPackageOrder && (
+              {key === 'history' && orderSessionCount > 0 && pendingPackageCount === 0 && (
                 <span className="sd-nav-badge" style={{ marginLeft: 'auto' }}>
                   {orderSessionCount}
                 </span>
               )}
-              {key === 'history' && orderSessionCount > 0 && pendingPackageOrder && (
+              {key === 'history' && orderSessionCount > 0 && pendingPackageCount > 0 && (
                 <span className="sd-nav-badge">
                   {orderSessionCount}
                 </span>
@@ -6165,12 +7890,14 @@ export default function StudentDashboard() {
   const handlePackageReady = async (payload, addMenuItems) => {
     const packagePayloads = normalizePackagePayloads(payload)
     if (addMenuItems) {
-      if (!isMenuItemOrderOpen()) {
+      const hasQueuedMenuItems = Object.values(menuCart || {}).some((entry) => Number(entry?.qty || 0) > 0)
+      if (hasQueuedMenuItems && !isMenuItemOrderOpen()) {
         showToast(MENU_ITEM_ORDER_HOURS_MESSAGE, 'error')
         return false
       }
       setPendingPackageOrder(packagePayloads)
-      selectTab('menu')
+      setActiveOrderShortcut('all')
+      selectTab('packages')
       return true
     } else {
       try {
@@ -6197,6 +7924,74 @@ export default function StudentDashboard() {
       }
     }
   }
+
+  useEffect(() => {
+    if (activeTab !== 'packages' || pendingPackageCount === 0) return
+    const timer = setTimeout(() => {
+      menuExtrasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [activeTab, pendingPackageCount])
+
+  useEffect(() => {
+    if (!pendingEmbeddedCheckoutMode) return
+    if (pendingEmbeddedCheckoutMode === 'wait-for-package' && pendingPackageCount === 0) return
+
+    menuExtrasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setEmbeddedCheckoutRequestToken((prev) => prev + 1)
+    setPendingEmbeddedCheckoutMode(null)
+  }, [pendingEmbeddedCheckoutMode, pendingPackageCount])
+
+  const menuItemsPanel = (
+    <div ref={menuExtrasRef}>
+      <MenuItemsPanel
+        refetchOrders={refetchOrders}
+        pendingPackageOrder={pendingPackageOrder}
+        onPendingPackageOrderChange={setPendingPackageOrder}
+        onPackageOrderSent={() => setPendingPackageOrder(null)}
+        showToast={showToast}
+        onOrderSuccess={setOrderSuccess}
+        mealTypes={mealTypes}
+        weeklyPlan={weeklyPlan}
+        onFloatingCartBarChange={setMobileMenuCartVisible}
+        embedded
+        headerTitle="Add Menu Items"
+        headerSubtitle={pendingPackageCount > 0
+          ? 'All admin-added categories and menu items are shown below. Add any extras to the same shared cart.'
+          : ''}
+        sharedCart={menuCart}
+        onSharedCartChange={setMenuCart}
+        embeddedCheckoutRequestToken={embeddedCheckoutRequestToken}
+        activeShortcut={activeOrderShortcut}
+        suppressEmbeddedMobileCart
+      />
+    </div>
+  )
+
+  const mealPackagesPanel = (
+    <MealPackagesViewerPanel
+      mealTypes={mealTypes}
+      loadingTypes={loadingTypes}
+      onPackageReady={handlePackageReady}
+      weeklyPlan={weeklyPlan}
+      onOpenMenu={() => menuExtrasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+      onContinuePendingOrder={({ waitForPendingPackage = false } = {}) => {
+        setActiveOrderShortcut('all')
+        setPendingEmbeddedCheckoutMode(waitForPendingPackage ? 'wait-for-package' : 'open-now')
+      }}
+      hasPendingPackageOrder={pendingPackageCount > 0}
+      pendingPackageOrder={pendingPackageOrder}
+      sharedMenuCart={menuCart}
+      onSharedMenuCartChange={setMenuCart}
+      onPendingPackageOrderChange={setPendingPackageOrder}
+      onSharedCartSnapshotChange={handleSharedCartSnapshotChange}
+      sharedCartActionRef={sharedCartActionRef}
+      initialSelectedDate={savedSelectedDate}
+      initialPackageCart={savedPackageCart}
+      draftSyncToken={cartDraftSyncToken}
+      onDraftStateChange={handlePackageDraftStateChange}
+    />
+  )
 
   return (
     <div className="sd-root">
@@ -6226,7 +8021,7 @@ export default function StudentDashboard() {
       )}
 
       {/* ── Mobile bottom nav ── */}
-      <nav className={`sd-bottom-nav${mobileMenuCartVisible || showMobileSidebar ? ' sd-bottom-nav-hidden' : ''}`}>
+      <nav className={`sd-bottom-nav${mobileMenuCartVisible || showMobileSidebar || showMobileSharedCartBar || showMobileSharedCart ? ' sd-bottom-nav-hidden' : ''}`}>
         {TABS.map(({ key, label, Icon }) => {
           const NavIcon = Icon
           return (
@@ -6237,7 +8032,7 @@ export default function StudentDashboard() {
             >
               <NavIcon size={20} strokeWidth={2.2} />
               <span>{label.split(' ')[0]}</span>
-              {key === 'menu' && pendingPackageOrder && (
+              {key === 'packages' && pendingPackageCount > 0 && (
                 <span className="sd-bottom-nav-badge">+</span>
               )}
             </button>
@@ -6248,6 +8043,33 @@ export default function StudentDashboard() {
           <span>Logout</span>
         </button>
       </nav>
+
+      {showMobileSharedCartBar && (
+        <button type="button" className="sd-mobile-cart-bar" onClick={() => setShowMobileSharedCart(true)}>
+          <span className="sd-mobile-cart-bar-main">
+            <span className="sd-mobile-cart-bar-title">
+              <ShoppingCart size={16} strokeWidth={2.2} />
+              Your Cart {sharedCartItemCount > 0 ? `(${sharedCartItemCount})` : ''}
+            </span>
+            <span className="sd-mobile-cart-bar-total">LKR {Number(sharedCartSnapshot.summaryTotal || 0).toFixed(2)}</span>
+          </span>
+          <span className="sd-mobile-cart-bar-cta">View Cart</span>
+        </button>
+      )}
+
+      {showMobileSharedCart && createPortal(
+        <div className="sd-mobile-cart-overlay" onClick={() => setShowMobileSharedCart(false)}>
+          <div className="sd-mobile-cart-sheet" onClick={(e) => e.stopPropagation()}>
+            <SharedOrderCartSidebar
+              snapshot={sharedCartSnapshot}
+              actionsRef={sharedCartActionRef}
+              mobile
+              onClose={() => setShowMobileSharedCart(false)}
+            />
+          </div>
+        </div>,
+        document.body
+      )}
 
       <div className="sd-main">
         <header className="sd-topbar">
@@ -6260,28 +8082,28 @@ export default function StudentDashboard() {
             >
               <MenuIcon size={18} strokeWidth={2.3} />
             </button>
-            <div>
-            <h1 className="sd-topbar-title">
-              {TABS.find((t) => t.key === activeTab)?.label}
-            </h1>
-            <p className="sd-topbar-date">
-              {new Date().toLocaleDateString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </p>
+            <div className="sd-topbar-copy">
+              <h1 className="sd-topbar-title">
+                {TABS.find((t) => t.key === activeTab)?.label}
+              </h1>
+              <p className="sd-topbar-date">
+                {new Date().toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </p>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="sd-topbar-actions">
             <div className="sd-topbar-welcome">
               Welcome back, <strong>{user?.username}</strong>
             </div>
 
             {/* Notification icon */}
-            <div style={{ position: 'relative' }}>
-              <button className="sd-topbar-icon-btn" onClick={handleOpenNotifs}>
+            <div className="sd-topbar-action-shell">
+              <button className="sd-topbar-icon-btn" onClick={handleOpenNotifs} aria-label="Open notifications">
                 <Bell size={18} strokeWidth={2.2} />
                 {unreadCount > 0 && <span className="sd-topbar-notif-dot">{unreadCount}</span>}
               </button>
@@ -6354,7 +8176,7 @@ export default function StudentDashboard() {
                               role="button"
                               tabIndex={0}
                               key={n.id}
-                              className={n.is_read ? `sd-notif-item ${card.tone}` : `sd-notif-item ${card.tone} unread`}
+                              className={`sd-notif-item ${card.tone} ${n.is_read ? 'read' : 'unread'}`}
                               onClick={() => handleNotificationClick(n)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter' || e.key === ' ') {
@@ -6402,8 +8224,8 @@ export default function StudentDashboard() {
             </div>
 
             {/* Profile icon */}
-            <div style={{ position: 'relative' }}>
-              <button className="sd-topbar-icon-btn" onClick={() => setShowProfile((p) => !p)}>
+            <div className="sd-topbar-action-shell">
+              <button className="sd-topbar-icon-btn" onClick={() => setShowProfile((p) => !p)} aria-label="Open profile menu">
                 <User size={18} strokeWidth={2.2} />
               </button>
             </div>
@@ -6420,27 +8242,34 @@ export default function StudentDashboard() {
 
         <main className="sd-content">
           {activeTab === 'packages' && (
-            <MealPackagesViewerPanel
-              mealTypes={mealTypes}
-              loadingTypes={loadingTypes}
-              onPackageReady={handlePackageReady}
-              weeklyPlan={weeklyPlan}
-              onOpenMenu={() => selectTab('menu')}
-            />
-          )}
+            <div className="sd-unified-order-shell">
+              <div className="sd-unified-order-main">
+                <div className="sd-order-shortcuts" aria-label="Meal ordering categories">
+                  {orderShortcuts.map((shortcut) => (
+                    <button
+                      key={shortcut.key}
+                      type="button"
+                      className={`sd-order-shortcut-chip${activeOrderShortcut === shortcut.key ? ' active' : ''}`}
+                      onClick={() => setActiveOrderShortcut(shortcut.key)}
+                    >
+                      {shortcut.label}
+                    </button>
+                  ))}
+                </div>
 
-          {activeTab === 'menu' && (
-            <MenuItemsPanel
-              refetchOrders={refetchOrders}
-              pendingPackageOrder={pendingPackageOrder}
-              onPendingPackageOrderChange={setPendingPackageOrder}
-              onPackageOrderSent={() => setPendingPackageOrder(null)}
-              showToast={showToast}
-              onOrderSuccess={setOrderSuccess}
-              mealTypes={mealTypes}
-              weeklyPlan={weeklyPlan}
-              onFloatingCartBarChange={setMobileMenuCartVisible}
-            />
+                <div className="sd-unified-order-flow">
+                  <div style={{ order: mealPackagesPanelOrder }}>
+                    {mealPackagesPanel}
+                  </div>
+                  <div style={{ order: menuItemsPanelOrder }}>
+                    {menuItemsPanel}
+                  </div>
+                </div>
+              </div>
+              <aside className="sd-unified-order-sidebar">
+                <SharedOrderCartSidebar snapshot={sharedCartSnapshot} actionsRef={sharedCartActionRef} />
+              </aside>
+            </div>
           )}
 
           {activeTab === 'history' && (

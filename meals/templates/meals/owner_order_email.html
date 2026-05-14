@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>New Student Order - {{ order_reference }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f0e8;font-family:'Segoe UI',Arial,sans-serif;color:#2c1a0e;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f0e8;padding:24px 10px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%;background:#ffffff;border:1px solid #ede0cc;border-radius:14px;overflow:hidden;">
+          <tr>
+            <td style="background:#2c1a0e;padding:24px 24px 20px;text-align:center;">
+              <img
+                src="cid:{{ logo_cid|default:'owner-order-logo-cid' }}"
+                alt="Cafe Lush Logo"
+                width="74"
+                height="74"
+                style="display:block;margin:0 auto 12px;border-radius:50%;border:2px solid #c9a84c;object-fit:cover;"
+              />
+              <div style="font-size:28px;line-height:32px;font-weight:700;letter-spacing:0.5px;color:#c9a84c;">Cafe Lush</div>
+              <div style="margin-top:6px;font-size:16px;line-height:22px;font-weight:600;color:#fff8ef;">New Student Order Received</div>
+              <div style="margin-top:6px;font-size:13px;line-height:18px;color:#d8c7b2;">This order has also been sent to the cashier panel.</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#fdf8f0;border-top:1px solid #ede0cc;border-bottom:1px solid #ede0cc;padding:14px 18px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:3px 4px;">
+                    Order Ref:
+                    <strong style="color:#2c1a0e;">{{ order_reference }}</strong>
+                  </td>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:3px 4px;text-align:right;">
+                    Placed:
+                    <strong style="color:#2c1a0e;">{{ created_at|date:"M j, Y, g:i a" }}</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:3px 4px;">
+                    Checkout ID:
+                    <strong style="color:#2c1a0e;">{{ session_display_id }}</strong>
+                  </td>
+                  <td style="font-size:13px;line-height:18px;color:#7b4f2e;padding:3px 4px;text-align:right;">
+                    Order Type:
+                    <strong style="color:#2c1a0e;">{{ order_mix }}</strong>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 18px 8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td valign="top" width="50%" style="padding:0 8px 12px 0;">
+                    <div style="border:1px solid #ede0cc;border-radius:12px;background:#fdf8f0;padding:14px 14px 12px;">
+                      <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9b8b7a;margin-bottom:8px;">Student Details</div>
+                      <div style="font-size:18px;line-height:24px;font-weight:700;color:#2c1a0e;">{{ student_name }}</div>
+                      <div style="font-size:13px;line-height:19px;color:#7b4f2e;margin-top:6px;">Email: {{ student_email|default:"-" }}</div>
+                      <div style="font-size:13px;line-height:19px;color:#7b4f2e;">Phone: {{ phone_number|default:student_contact|default:"-" }}</div>
+                    </div>
+                  </td>
+                  <td valign="top" width="50%" style="padding:0 0 12px 8px;">
+                    <div style="border:1px solid #ede0cc;border-radius:12px;background:#fdf8f0;padding:14px 14px 12px;">
+                      <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9b8b7a;margin-bottom:8px;">Fulfillment</div>
+                      <div style="font-size:18px;line-height:24px;font-weight:700;color:#2c1a0e;">{{ delivery_type_label }}</div>
+                      <div style="font-size:13px;line-height:19px;color:#7b4f2e;margin-top:6px;">{{ address_label }}: {{ delivery_address|default:"Not provided" }}</div>
+                      {% if city_area %}
+                      <div style="font-size:13px;line-height:19px;color:#7b4f2e;">Area: {{ city_area }}</div>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9b8b7a;margin:8px 0 10px;">Order Lines</div>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;table-layout:fixed;">
+                <thead>
+                  <tr>
+                    <th width="40%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Item</th>
+                    <th width="18%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Type</th>
+                    <th width="10%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Qty</th>
+                    <th width="16%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Unit</th>
+                    <th width="16%" style="padding:9px 6px;border-bottom:1px solid #ede0cc;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#9b8b7a;">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for line in order_lines %}
+                  <tr>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;vertical-align:top;">
+                      <div style="font-size:14px;line-height:20px;font-weight:700;color:#2c1a0e;word-break:break-word;">{{ line.label }}</div>
+                      <div style="font-size:12px;line-height:18px;color:#7b4f2e;margin-top:2px;">{{ line.order_date|date:"M j, Y" }} • {{ line.ready_label }}</div>
+                    </td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;vertical-align:top;font-size:13px;line-height:19px;color:#2c1a0e;">{{ line.kind }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;vertical-align:top;text-align:center;font-size:13px;line-height:19px;color:#2c1a0e;">{{ line.quantity }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;vertical-align:top;text-align:right;font-size:12px;line-height:18px;color:#2c1a0e;white-space:nowrap;">{{ line.unit_price|floatformat:2 }}</td>
+                    <td style="padding:10px 6px;border-bottom:1px solid #f5f0e8;vertical-align:top;text-align:right;font-size:12px;line-height:18px;font-weight:700;color:#2c1a0e;white-space:nowrap;">{{ line.line_total|floatformat:2 }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;border-top:2px solid #2c1a0e;">
+                <tr>
+                  <td style="padding:12px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Line Items</td>
+                  <td style="padding:12px 6px 0;text-align:right;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">{{ line_count }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Total Quantity</td>
+                  <td style="padding:8px 6px 0;text-align:right;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">{{ total_quantity }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Subtotal</td>
+                  <td style="padding:8px 6px 0;text-align:right;font-size:16px;line-height:20px;font-weight:600;color:#2c1a0e;white-space:nowrap;">Rs.{{ subtotal_amount|floatformat:2 }}</td>
+                </tr>
+                {% if show_delivery_fee %}
+                <tr>
+                  <td style="padding:8px 6px 0;font-size:13px;line-height:18px;font-weight:600;color:#2c1a0e;">Delivery Fee</td>
+                  <td style="padding:8px 6px 0;text-align:right;font-size:16px;line-height:20px;font-weight:600;color:#2c1a0e;white-space:nowrap;">Rs.{{ delivery_fee|floatformat:2 }}</td>
+                </tr>
+                {% endif %}
+                <tr>
+                  <td style="padding:12px 6px 4px;font-size:14px;line-height:20px;font-weight:700;letter-spacing:0.5px;color:#2c1a0e;">GRAND TOTAL</td>
+                  <td style="padding:12px 6px 4px;text-align:right;font-size:26px;line-height:30px;font-weight:700;color:#c9a84c;white-space:nowrap;">Rs.{{ total_amount|floatformat:2 }}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#fdf8f0;border-top:1px solid #ede0cc;padding:16px 18px 18px;text-align:center;">
+              <p style="margin:0;font-size:12px;line-height:18px;color:#9b8b7a;">Owner notification for new student orders. Review the cashier panel for live status updates and billing actions.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from datetime import timedelta
 from django.core.exceptions import ValidationError as DjangoValidationError
-from pos.models import Item
+from pos.models import Item, MenuItem, ItemVariant
 from hotel_pos_backend.validators import validate_generic_email_format, validate_sri_lankan_mobile
 from .delivery import (
     LOCATION_SOURCE_ADDRESS,
@@ -27,6 +27,54 @@ def get_package_ready_time(meal_type):
     return PACKAGE_READY_TIMES.get(meal_name)
 
 
+def get_meal_order_item_label(order):
+    if getattr(order, 'order_type', '') != 'item':
+        return ''
+
+    snapshot = (getattr(order, 'item_name_snapshot', '') or '').strip()
+    if snapshot:
+        return snapshot
+
+    variant = getattr(order, 'item_variant', None)
+    menu_item = getattr(order, 'menu_item', None)
+    legacy_item = getattr(order, 'item', None)
+
+    if variant and menu_item:
+        group_name = getattr(getattr(menu_item, 'menu_group', None), 'name', '') or ''
+        group_label = 'Shake' if group_name == 'Shakes' else group_name
+        base_name = (menu_item.name or '').strip()
+        base_lower = base_name.lower()
+        group_lower = group_label.lower()
+        full_base_name = f'{base_name} {group_label}'.strip() if group_label and group_lower not in base_lower else base_name
+        return f'{full_base_name} - {variant.name}'
+    if menu_item:
+        return menu_item.name
+    if legacy_item:
+        return legacy_item.name
+    return 'Menu item'
+
+
+def get_meal_order_item_unit_price(order):
+    if getattr(order, 'order_type', '') != 'item':
+        return 0
+
+    snapshot_price = getattr(order, 'item_price_snapshot', None)
+    if snapshot_price not in (None, ''):
+        return float(snapshot_price)
+
+    variant = getattr(order, 'item_variant', None)
+    menu_item = getattr(order, 'menu_item', None)
+    legacy_item = getattr(order, 'item', None)
+
+    if variant:
+        return float(variant.price)
+    if menu_item:
+        return float(menu_item.price)
+    if legacy_item:
+        return float(legacy_item.price)
+    return 0
+
+
 class MealTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model  = MealType
@@ -37,6 +85,33 @@ class PackageItemSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Item
         fields = ['id', 'name', 'price', 'category']
+
+
+class StudentItemVariantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ItemVariant
+        fields = ['id', 'name', 'price', 'is_active']
+
+
+class StudentMenuItemSerializer(serializers.ModelSerializer):
+    menu_group_name = serializers.CharField(source='menu_group.name', read_only=True)
+    category = serializers.IntegerField(source='menu_group.category_id', read_only=True)
+    category_name = serializers.CharField(source='menu_group.category.name', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    variants = StudentItemVariantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = MenuItem
+        fields = [
+            'id', 'menu_group', 'menu_group_name', 'category', 'category_name',
+            'item_id', 'name', 'price', 'image_url', 'variants',
+        ]
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.image.url) if request else obj.image.url
 
 
 class MealPackageSerializer(serializers.ModelSerializer):
@@ -66,70 +141,140 @@ class NotificationSerializer(serializers.ModelSerializer):
         model  = Notification
         fields = ['id', 'message', 'is_read', 'created_at', 'order', 'order_detail']
 
+    def _format_order_label(self, order):
+        if order.order_type == 'item':
+            return get_meal_order_item_label(order)
+
+        meal_name = order.meal_type.name if order.meal_type else 'Meal package'
+        if order.preference == 'veg':
+            return f'Veg {meal_name}'
+        if order.preference == 'non-veg':
+            return f'Non-Veg {meal_name}'
+        return meal_name
+
     def get_order_detail(self, obj):
         order = obj.order
         if not order:
             return None
 
-        if order.order_type == 'item':
-            order_name = order.item.name if order.item else 'Menu item'
-            order_label = order_name
-            order_kind = 'Menu item'
-            pickup_time = None
-            unit_price = order.item.price if order.item else 0
-        else:
-            meal_name = order.meal_type.name if order.meal_type else 'Meal package'
-            if order.preference == 'veg':
-                order_label = f'Veg {meal_name}'
-            elif order.preference == 'non-veg':
-                order_label = f'Non-Veg {meal_name}'
-            else:
-                order_label = meal_name
-            order_name = meal_name
-            order_kind = 'Meal package'
-            pickup_time = get_package_ready_time(order.meal_type)
-            unit_price = order.meal_type.price if order.meal_type and hasattr(order.meal_type, 'price') else 0
-
-        bill = getattr(order, 'bill', None)
         cache = self.context.setdefault('_order_reference_cache', {})
+        session_cache = self.context.setdefault('_notification_session_cache', {})
+        session_key = order.session_id or f'order-{order.id}'
+
+        if session_key not in session_cache:
+            if order.session_id:
+                session_orders = list(
+                    MealOrder.objects.filter(session_id=order.session_id)
+                    .select_related('meal_type', 'item', 'menu_item', 'item_variant', 'bill')
+                    .order_by('created_at', 'id')
+                )
+            else:
+                session_orders = [order]
+
+            package_order = next((item for item in session_orders if item.order_type == 'package'), None)
+            item_orders = [item for item in session_orders if item.order_type == 'item']
+            anchor_order = package_order or session_orders[0]
+            bill = (
+                Bill.objects.filter(source='online', meal_order__session_id=order.session_id).first()
+                if order.session_id else getattr(anchor_order, 'bill', None)
+            )
+
+            line_items = []
+            total_quantity = 0
+            for session_order in session_orders:
+                label = self._format_order_label(session_order)
+                qty = session_order.quantity or 0
+                total_quantity += qty
+                unit_price = get_meal_order_item_unit_price(session_order) if session_order.order_type == 'item' else 0
+                if session_order.order_type == 'package':
+                    unit_price = session_order.meal_type.price if session_order.meal_type and hasattr(session_order.meal_type, 'price') else 0
+                line_items.append({
+                    'id': session_order.id,
+                    'label': label,
+                    'kind': 'Menu item' if session_order.order_type == 'item' else 'Meal package',
+                    'quantity': qty,
+                    'order_date': session_order.order_date,
+                    'unit_price': unit_price,
+                })
+
+            if package_order and item_orders:
+                order_kind = 'Combined order'
+                summary_label = f'{self._format_order_label(package_order)} + {len(item_orders)} menu item{"s" if len(item_orders) != 1 else ""}'
+                pickup_time = get_package_ready_time(package_order.meal_type)
+            elif package_order:
+                order_kind = 'Meal package'
+                summary_label = self._format_order_label(package_order)
+                pickup_time = get_package_ready_time(package_order.meal_type)
+            else:
+                order_kind = 'Menu item'
+                summary_label = self._format_order_label(anchor_order)
+                pickup_time = None
+
+            session_cache[session_key] = {
+                'anchor_order': anchor_order,
+                'bill': bill,
+                'order_kind': order_kind,
+                'summary_label': summary_label,
+                'line_items': line_items,
+                'total_quantity': total_quantity,
+                'pickup_time': pickup_time,
+            }
+
+        session_detail = session_cache[session_key]
+        anchor_order = session_detail['anchor_order']
+        bill = session_detail['bill']
 
         return {
-            'id': order.id,
-            'order_reference': build_order_reference(order, cache=cache),
+            'id': anchor_order.id,
+            'order_reference': build_order_reference(anchor_order, cache=cache),
             'bill_number': bill.bill_number if bill else '',
-            'status': order.status,
-            'order_type': order.order_type,
-            'order_kind': order_kind,
-            'name': order_name,
-            'label': order_label,
-            'quantity': order.quantity,
-            'order_date': order.order_date,
-            'preference': order.preference,
-            'delivery_type': order.delivery_type,
-            'delivery_address': order.delivery_address,
-            'phone_number': order.phone_number,
-            'student_email': order.student_email,
-            'delivery_fee': order.delivery_fee,
-            'unit_price': unit_price,
-            'pickup_time': pickup_time,
-            'created_at': order.created_at,
+            'status': anchor_order.status,
+            'order_type': anchor_order.order_type,
+            'order_kind': session_detail['order_kind'],
+            'name': self._format_order_label(anchor_order),
+            'label': session_detail['summary_label'],
+            'quantity': anchor_order.quantity,
+            'total_quantity': session_detail['total_quantity'],
+            'order_date': anchor_order.order_date,
+            'preference': anchor_order.preference,
+            'delivery_type': anchor_order.delivery_type,
+            'delivery_address': bill.delivery_address if bill else anchor_order.delivery_address,
+            'phone_number': bill.phone_number if bill else anchor_order.phone_number,
+            'student_email': bill.sent_to_email if bill else anchor_order.student_email,
+            'delivery_fee': bill.delivery_fee if bill else anchor_order.delivery_fee,
+            'subtotal_amount': bill.subtotal_amount if bill else '',
+            'total_amount': bill.total_amount if bill else '',
+            'unit_price': 0,
+            'pickup_time': session_detail['pickup_time'],
+            'created_at': anchor_order.created_at,
+            'session_lines': session_detail['line_items'],
         }
 
 
 class MealOrderSerializer(serializers.ModelSerializer):
     meal_type_name = serializers.CharField(source='meal_type.name', read_only=True)
     student_name   = serializers.CharField(source='student.full_name', read_only=True)
-    item_name      = serializers.CharField(source='item.name', read_only=True)
+    item_name      = serializers.SerializerMethodField()
     pickup_time    = serializers.SerializerMethodField()
     package_label  = serializers.SerializerMethodField()
     unit_price     = serializers.SerializerMethodField()
     order_reference = serializers.SerializerMethodField()
     bill_number    = serializers.SerializerMethodField()
+    menu_item      = serializers.PrimaryKeyRelatedField(
+        queryset=MenuItem.objects.filter(is_available=True, menu_group__is_active=True, menu_group__category__is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    item_variant   = serializers.PrimaryKeyRelatedField(
+        queryset=ItemVariant.objects.filter(is_active=True, item__is_available=True, item__menu_group__is_active=True, item__menu_group__category__is_active=True),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model  = MealOrder
         fields = ['id', 'student', 'student_name', 'meal_type', 'meal_type_name',
-                  'item', 'item_name', 'order_type', 'order_date', 'preference',
+                  'item', 'menu_item', 'item_variant', 'item_name', 'order_type', 'order_date', 'preference',
                   'delivery_type', 'quantity', 'delivery_address',
                   'address_line_1', 'address_line_2', 'city_area', 'location_source',
                   'delivery_latitude', 'delivery_longitude', 'delivery_fee', 'phone_number',
@@ -169,6 +314,9 @@ class MealOrderSerializer(serializers.ModelSerializer):
     def validate(self, data):
         order_type = data.get('order_type', 'package')
         quantity = data.get('quantity')
+        legacy_item = data.get('item')
+        menu_item = data.get('menu_item')
+        item_variant = data.get('item_variant')
         phone_number = (data.get('phone_number') or '').strip()
         delivery_type = (data.get('delivery_type') or 'takeaway').strip().lower()
         address_line_1 = (data.get('address_line_1') or '').strip()
@@ -186,6 +334,12 @@ class MealOrderSerializer(serializers.ModelSerializer):
         data['location_source'] = location_source
         data['delivery_latitude'] = delivery_latitude
         data['delivery_longitude'] = delivery_longitude
+
+        if item_variant and not menu_item:
+            menu_item = item_variant.item
+            data['menu_item'] = menu_item
+        if item_variant and menu_item and item_variant.item_id != menu_item.id:
+            raise serializers.ValidationError({'item_variant': 'The selected variant does not belong to the selected menu item.'})
 
         if delivery_type == 'delivery':
             if not address_line_1:
@@ -219,12 +373,27 @@ class MealOrderSerializer(serializers.ModelSerializer):
         data['delivery_address'] = delivery_address
 
         if order_type == 'item':
-            if not data.get('item'):
-                raise serializers.ValidationError({'item': 'An item is required for item orders.'})
+            if not legacy_item and not menu_item:
+                raise serializers.ValidationError({'item': 'A menu item is required for item orders.'})
             if not phone_number:
                 raise serializers.ValidationError({'phone_number': 'A phone number is required for menu item orders.'})
             if delivery_type == 'delivery' and not delivery_address:
                 raise serializers.ValidationError({'delivery_address': 'A delivery address is required for delivery orders.'})
+            if menu_item:
+                label = get_meal_order_item_label(type('OrderPreview', (), {
+                    'order_type': 'item',
+                    'item_name_snapshot': '',
+                    'item_variant': item_variant,
+                    'menu_item': menu_item,
+                    'item': None,
+                })())
+                price = item_variant.price if item_variant else menu_item.price
+                data['item_name_snapshot'] = label
+                data['item_price_snapshot'] = price
+                data['item'] = None
+            elif legacy_item:
+                data['item_name_snapshot'] = legacy_item.name
+                data['item_price_snapshot'] = legacy_item.price
         else:
             if not data.get('meal_type'):
                 raise serializers.ValidationError({'meal_type': 'A meal type is required for package orders.'})
@@ -240,6 +409,9 @@ class MealOrderSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'location_source': 'Meal package deliveries must use the typed address only.'})
         return data
 
+    def get_item_name(self, obj):
+        return get_meal_order_item_label(obj)
+
     def get_pickup_time(self, obj):
         if obj.order_type == 'package':
             return get_package_ready_time(obj.meal_type)
@@ -250,13 +422,13 @@ class MealOrderSerializer(serializers.ModelSerializer):
 
     def get_unit_price(self, obj):
         if obj.order_type == 'item':
-            return float(obj.item.price) if obj.item else 0
+            return get_meal_order_item_unit_price(obj)
         return float(obj.meal_type.price) if obj.meal_type and hasattr(obj.meal_type, 'price') else 0
 
     def get_package_label(self, obj):
         """Returns e.g. 'Veg Breakfast', 'Non-Veg Dinner', or item name."""
         if obj.order_type == 'item':
-            return obj.item.name if obj.item else ''
+            return get_meal_order_item_label(obj)
         meal = obj.meal_type.name if obj.meal_type else 'Package'
         if obj.preference == 'veg':
             return f'Veg {meal}'

@@ -1,16 +1,16 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useAuth } from '../../context/authContextCore'
-import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getItems, getCategories, updateOrderStatus, updateOrderSessionStatus, updateWalkInBill } from '../../api/endpoints'
+import { getDailySummary, getPosOrders, getOnlineOrders, generateOnlineBill, generateWalkInBill, getWalkInBills, getMenuGroups, getMenuItems, updateOrderStatus, updateOrderSessionStatus, updateWalkInBill } from '../../api/endpoints'
 import { Spinner, EmptyState } from '../../components/UI'
 import { useOrderSocket } from '../../hooks/useOrderSocket'
 import { useBodyScrollLock } from '../../hooks/useBodyScrollLock'
-import { useReactToPrint } from 'react-to-print'
 import PrintBillView from './PrintBillView'
 import PrintWalkinBill from './PrintWalkinBill'
+import { openReceiptPrintWindow } from './printReceiptHelpers'
 import './CashierDashboard.css'
 
-// ── Confirm Dialog ────────────────────────────────────────────────────────────
+// Confirm dialog
 function ConfirmDialog({
   title = 'Clear Confirmation',
   message,
@@ -25,7 +25,7 @@ function ConfirmDialog({
   return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex }}>
       <div style={{ background: '#fff', borderRadius: '12px', padding: '28px 32px', maxWidth: '360px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', textAlign: 'center' }}>
-        <div style={{ fontSize: '32px', marginBottom: '12px' }}>🗑️</div>
+        <div style={{ fontSize: '32px', marginBottom: '12px' }}>{'\u{1F5D1}\uFE0F'}</div>
         <div style={{ fontWeight: 700, fontSize: '15px', color: '#2C1A0E', marginBottom: '8px' }}>{title}</div>
         <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '24px' }}>{message}</div>
         <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
@@ -192,65 +192,51 @@ function NewOrderToast({ toast, onOpen, onClose }) {
   )
 }
 
-// ── Per-bill printable receipt (Bill History tab) ────────────────────────────
-function BillReceipt({ order, innerRef }) {
-  return (
-    <div ref={innerRef} style={{ padding: '24px', fontFamily: 'DM Sans, sans-serif' }}>
-      <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-        <div style={{ fontFamily: 'Playfair Display, serif', fontSize: '18px', fontWeight: 700, color: '#2C1A0E' }}>Cafe Lush</div>
-        <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '4px' }}>Official Receipt</div>
-        {order.order_reference && <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px', fontWeight: 700 }}>Order Ref: {order.order_reference}</div>}
-        {order.bill_id && <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px', fontWeight: 700 }}>Bill No (Internal): {order.bill_id}</div>}
-        <div style={{ fontSize: '11px', color: '#4A7C45', marginTop: '2px' }}>{new Date(order.created_at).toLocaleString()}</div>
-        {order.cashier_name && <div style={{ fontSize: '11px', color: '#4A7C45' }}>Cashier: {order.cashier_name}</div>}
-      </div>
-      <div style={{ borderTop: '1px dashed #ccc', paddingTop: '12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontWeight: 600, fontSize: '11px' }}>
-          <span>ITEM</span><span>AMOUNT</span>
-        </div>
-        {order.order_items?.map((line) => (
-          <div key={line.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 600 }}>{line.item_name}</div>
-              <div style={{ fontSize: '10px', color: '#4A7C45' }}>Rs.{parseFloat(line.unit_price).toFixed(2)} × {line.quantity}</div>
-            </div>
-            <span style={{ fontSize: '12px', fontWeight: 600 }}>Rs.{parseFloat(line.line_total).toFixed(2)}</span>
-          </div>
-        ))}
-      </div>
-      <div style={{ borderTop: '1px dashed #ccc', marginTop: '12px', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: '13px', fontWeight: 600, color: '#3D6B38' }}>TOTAL</span>
-        <span style={{ fontFamily: 'Playfair Display, serif', fontSize: '20px', fontWeight: 700, color: '#C9A84C' }}>Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
-      </div>
-      <div style={{ textAlign: 'center', fontSize: '11px', color: '#4A7C45', marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '12px' }}>
-        Thank you for dining with us! 🙏
-      </div>
-    </div>
-  )
+function buildHistoryPrintBill(order) {
+  return {
+    id: order.bill_pk,
+    bill_number: order.bill_id,
+    order_reference: order.order_reference || '',
+    generated_at: order.created_at,
+    total_amount: order.total_amount,
+    subtotal_amount: order.subtotal_amount ?? order.total_amount,
+    cashier_name: order.cashier_name || '',
+    customer_name: order.customer_name || '',
+    items: Array.isArray(order.order_items)
+      ? order.order_items.map((line) => ({
+          item_id: line.item_id ?? null,
+          name: line.item_name,
+          qty: Number(line.quantity || 0),
+          unit_price: Number(line.unit_price || 0),
+          line_total: Number(line.line_total ?? Number(line.unit_price || 0) * Number(line.quantity || 0)),
+        }))
+      : [],
+  }
 }
 
 function EditWalkInBillModal({ order, onClose, onSaved }) {
   useBodyScrollLock()
 
   const [allItems, setAllItems] = useState([])
-  const [categories, setCategories] = useState([])
+  const [menuGroups, setMenuGroups] = useState([])
   const [loadingMenu, setLoadingMenu] = useState(true)
   const [search, setSearch] = useState('')
-  const [activeCat, setActiveCat] = useState('all')
+  const [activeGroup, setActiveGroup] = useState('all')
   const [customerName, setCustomerName] = useState(order.customer_name || '')
   const [bill, setBill] = useState(() => buildWalkInBillStateFromHistoryOrder(order))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [pendingRemoveLine, setPendingRemoveLine] = useState(null)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [variantPickerItem, setVariantPickerItem] = useState(null)
 
   useEffect(() => {
     let alive = true
-    Promise.all([getItems(), getCategories()])
-      .then(([itemsRes, catsRes]) => {
+    Promise.all([getMenuItems(), getMenuGroups()])
+      .then(([itemsRes, groupsRes]) => {
         if (!alive) return
         setAllItems(Array.isArray(itemsRes.data) ? itemsRes.data : [])
-        setCategories(Array.isArray(catsRes.data) ? catsRes.data : [])
+        setMenuGroups(Array.isArray(groupsRes.data) ? groupsRes.data : [])
       })
       .catch(() => {
         if (!alive) return
@@ -262,23 +248,64 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
     return () => { alive = false }
   }, [])
 
+  const groupMeta = useMemo(() => {
+    const meta = {}
+    menuGroups.forEach((group) => {
+      const items = allItems.filter((item) => String(item.menu_group) === String(group.id) && item.is_available)
+      const sorted = [...items].sort(compareMenuItemsByCode)
+      meta[group.id] = {
+        firstItem: sorted[0] || null,
+        codeRange: buildItemCodeRange(sorted),
+      }
+    })
+    return meta
+  }, [menuGroups, allItems])
+
+  const sortedMenuGroups = useMemo(
+    () => [...menuGroups].sort((a, b) => {
+      const firstA = groupMeta[a.id]?.firstItem
+      const firstB = groupMeta[b.id]?.firstItem
+      if (firstA && firstB) return compareMenuItemsByCode(firstA, firstB)
+      if (firstA && !firstB) return -1
+      if (!firstA && firstB) return 1
+      return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+    }),
+    [menuGroups, groupMeta]
+  )
+
   const filteredItems = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return allItems
-      .filter((item) => item.is_available)
-      .filter((item) => activeCat === 'all' || item.category === Number(activeCat))
-      .filter((item) => {
-        if (!q) return true
-        return (item.name || '').toLowerCase().includes(q) || (item.item_id || '').toLowerCase().includes(q)
-      })
+    const availableItems = allItems.filter((item) => item.is_available)
+    const matchesSearch = (item) => {
+      if (!q) return true
+      const variantText = getActiveVariants(item).map((variant) => variant.name || '').join(' ').toLowerCase()
+      return (
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.item_id || '').toLowerCase().includes(q) ||
+        variantText.includes(q)
+      )
+    }
+
+    if (activeGroup === 'all') {
+      return sortedMenuGroups.flatMap((group) =>
+        availableItems
+          .filter((item) => String(item.menu_group) === String(group.id))
+          .filter(matchesSearch)
+          .sort(compareMenuItemsByCode)
+      )
+    }
+
+    return availableItems
+      .filter((item) => String(item.menu_group) === String(activeGroup))
+      .filter(matchesSearch)
       .sort(compareMenuItemsByCode)
-  }, [allItems, activeCat, search])
+  }, [allItems, activeGroup, search, sortedMenuGroups])
 
   const billLines = Object.values(bill)
   const totalQuantity = billLines.reduce((sum, line) => sum + Number(line.qty || 0), 0)
   const totalAmount = billLines.reduce((sum, line) => sum + Number(line.item?.price || 0) * Number(line.qty || 0), 0)
 
-  const addItem = (item) => {
+  const addBillItem = (item) => {
     setBill((prev) => ({
       ...prev,
       [item.id]: prev[item.id]
@@ -298,6 +325,45 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
       const { [itemId]: _, ...rest } = prev
       return rest
     })
+  }
+
+  const toBillMenuItem = (item) => ({
+    id: getMenuItemLineKey(item),
+    snapshot_item_id: getMenuItemLineKey(item),
+    item_id: item.item_id || '',
+    name: item.name,
+    price: Number(item.price || 0),
+    image_url: item.image_url || '',
+    is_available: item.is_available,
+  })
+
+  const toBillVariantItem = (item, variant) => ({
+    id: getVariantLineKey(item, variant),
+    snapshot_item_id: getVariantLineKey(item, variant),
+    item_id: item.item_id || '',
+    name: buildVariantBillName(item, variant),
+    price: Number(variant.price || 0),
+    image_url: item.image_url || '',
+    is_available: item.is_available,
+    variant_name: variant.name || '',
+  })
+
+  const getVariantQty = (item, variant) => bill[getVariantLineKey(item, variant)]?.qty || 0
+
+  const handleAddVariant = (item, variant) => {
+    addBillItem(toBillVariantItem(item, variant))
+    setError('')
+  }
+
+  const handleDecreaseVariant = (item, variant) => {
+    const billItem = toBillVariantItem(item, variant)
+    const qty = bill[billItem.id]?.qty || 0
+    if (qty <= 0) return
+    if (qty === 1) {
+      removeLine(billItem.id)
+      return
+    }
+    setQty(billItem.id, qty - 1)
   }
 
   const handleDecrease = (item, qty) => {
@@ -327,7 +393,7 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
       const payload = {
         customer_name: customerName.trim(),
         items: billLines.map(({ item, qty }) => ({
-          item_id: getWalkInPayloadItemId(item.id),
+          item_id: getWalkInPayloadItemId(item.snapshot_item_id || item.id),
           name: item.name,
           quantity: qty,
           unit_price: Number(item.price || 0),
@@ -381,18 +447,18 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
 
                 <div className="cd-cat-row">
                   <button
-                    className={`cd-cat-pill${activeCat === 'all' ? ' active' : ''}`}
-                    onClick={() => setActiveCat('all')}
+                    className={`cd-cat-pill${activeGroup === 'all' ? ' active' : ''}`}
+                    onClick={() => setActiveGroup('all')}
                   >
                     All
                   </button>
-                  {categories.map((category) => (
+                  {sortedMenuGroups.map((group) => (
                     <button
-                      key={category.id}
-                      className={`cd-cat-pill${activeCat === String(category.id) ? ' active' : ''}`}
-                      onClick={() => setActiveCat(String(category.id))}
+                      key={group.id}
+                      className={`cd-cat-pill${activeGroup === String(group.id) ? ' active' : ''}`}
+                      onClick={() => setActiveGroup(String(group.id))}
                     >
-                      {category.name}
+                      {group.name}{groupMeta[group.id]?.codeRange ? `(${groupMeta[group.id].codeRange})` : ''}
                     </button>
                   ))}
                 </div>
@@ -408,9 +474,11 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
                     {filteredItems.map((item) => (
                       <div
                         key={item.id}
-                        className="cd-item-card"
+                        className={`cd-item-card${hasVariantChoices(item) ? ' has-variants' : ''}`}
                         data-item-name={item.name}
-                        onClick={() => addItem(item)}
+                        onClick={() => {
+                          if (!hasVariantChoices(item)) addBillItem(toBillMenuItem(item))
+                        }}
                       >
                         {item.image_url
                           ? <img src={item.image_url} alt={item.name} className="cd-item-img" />
@@ -420,6 +488,20 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
                           {item.item_id && <div className="cd-item-id">{item.item_id}</div>}
                           <div className="cd-item-name">{item.name}</div>
                           <div className="cd-item-price">Rs.{parseFloat(item.price).toFixed(2)}</div>
+                          {hasVariantChoices(item) && (
+                            <div className="cd-item-actions">
+                              <button
+                                type="button"
+                                className="cd-item-view-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setVariantPickerItem(item)
+                                }}
+                              >
+                                View Variants
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -520,12 +602,21 @@ function EditWalkInBillModal({ order, onClose, onSaved }) {
           onCancel={() => setShowClearConfirm(false)}
         />
       )}
+      {variantPickerItem && (
+        <VariantPickerModal
+          item={variantPickerItem}
+          getQty={getVariantQty}
+          onAdd={handleAddVariant}
+          onDecrease={handleDecreaseVariant}
+          onClose={() => setVariantPickerItem(null)}
+        />
+      )}
     </div>,
     document.body
   )
 }
 
-// ── Bill History Panel ────────────────────────────────────────────────────────
+// Bill History panel
 function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, summary, onClear, onBillUpdated }) {
   const [showConfirm, setShowConfirm] = useState(false)
   const [search, setSearch] = useState('')
@@ -602,7 +693,7 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
         <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : filteredOrders.length === 0 ? (
         <div className="cd-history-empty">
-          <div className="cd-history-empty-icon">📋</div>
+          <div className="cd-history-empty-icon">{'\u{1F4CB}'}</div>
           {search.trim() ? `No bill found for "${search.trim()}".` : 'No bills found for this date.'}
         </div>
       ) : (
@@ -624,8 +715,7 @@ function BillHistoryPanel({ historyDate, setHistoryDate, orders, loadingOrders, 
 function HistoryRow({ order, billNum, onBillUpdated }) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
-  const printRef = useRef()
-  const handlePrint = useReactToPrint({ contentRef: printRef })
+  const [printing, setPrinting] = useState(false)
 
   const createdAt = new Date(order.created_at)
   const dateStr = createdAt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -644,7 +734,7 @@ function HistoryRow({ order, billNum, onBillUpdated }) {
       <button className="cd-hbill-header" onClick={() => setExpanded((v) => !v)}>
         <div className="cd-hbill-header-left">
           <span className="cd-hbill-num">{primaryLabel}</span>
-          <span className="cd-hbill-time">{dateStr} — {timeStr}</span>
+          <span className="cd-hbill-time">{dateStr}{' \u2014 '}{timeStr}</span>
           {orderRef !== '-' && (
             <span style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>Bill No (Internal): {billLabel}</span>
           )}
@@ -657,7 +747,7 @@ function HistoryRow({ order, billNum, onBillUpdated }) {
         <div className="cd-hbill-header-right">
           {order.is_edited && <span className="cd-hbill-edited-badge">Edited</span>}
           <span className="cd-hbill-total">Rs.{parseFloat(order.total_amount).toFixed(2)}</span>
-          <span className="cd-hbill-chevron">{expanded ? '▲' : '▼'}</span>
+          <span className="cd-hbill-chevron">{expanded ? '\u25B2' : '\u25BC'}</span>
         </div>
       </button>
 
@@ -667,7 +757,7 @@ function HistoryRow({ order, billNum, onBillUpdated }) {
             {order.order_items?.map((line) => (
               <div key={line.id} className="cd-hbill-item-row">
                 <span className="cd-hbill-item-name">
-                  {line.item_name} <span className="cd-hbill-item-qty">× {line.quantity}</span>
+                  {line.item_name} <span className="cd-hbill-item-qty">{'\u00D7'} {line.quantity}</span>
                 </span>
                 <span className="cd-hbill-item-price">Rs.{lineTotal(line)}</span>
               </div>
@@ -693,14 +783,10 @@ function HistoryRow({ order, billNum, onBillUpdated }) {
             {order.source === 'walk_in' && (
               <button className="cd-hbill-edit-btn" onClick={() => setEditing(true)}>Edit Bill</button>
             )}
-            <button className="cd-hbill-print-btn" onClick={handlePrint}>🖨️ Print Receipt</button>
+            <button className="cd-hbill-print-btn" onClick={() => setPrinting(true)}>{'\u{1F5A8}\uFE0F Print Receipt'}</button>
           </div>
         </div>
       )}
-
-      <div style={{ display: 'none' }}>
-        <BillReceipt order={order} innerRef={printRef} />
-      </div>
 
       {editing && order.source === 'walk_in' && (
         <EditWalkInBillModal
@@ -709,20 +795,34 @@ function HistoryRow({ order, billNum, onBillUpdated }) {
           onSaved={onBillUpdated}
         />
       )}
+      {printing && (
+        <PrintWalkinBill
+          bill={buildHistoryPrintBill(order)}
+          onClose={() => setPrinting(false)}
+        />
+      )}
     </div>
   )
 }
 
-// ── Online Orders Panel ──────────────────────────────────────────────────────
+// Online Orders panel
 const HIDDEN_KEY = 'onlineOrders_hidden'
 const getHidden  = () => { try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')) } catch { return new Set() } }
 const saveHidden = (set) => localStorage.setItem(HIDDEN_KEY, JSON.stringify([...set]))
 const SEEN_ONLINE_KEY = 'cashier_seen_online_sessions'
+const LAST_ONLINE_VISIT_KEY = 'cashier_online_last_visit_at'
+const RECENT_BOOTSTRAP_NOTIFY_MS = 10 * 60 * 1000
 const loadSeenOnline = () => {
   try { return new Set(JSON.parse(localStorage.getItem(SEEN_ONLINE_KEY) || '[]')) } catch { return new Set() }
 }
 const saveSeenOnline = (set) => {
   try { localStorage.setItem(SEEN_ONLINE_KEY, JSON.stringify([...set].slice(-800))) } catch { /* ignore */ }
+}
+const loadLastOnlineVisit = () => {
+  try { return localStorage.getItem(LAST_ONLINE_VISIT_KEY) || '' } catch { return '' }
+}
+const saveLastOnlineVisit = (value) => {
+  try { localStorage.setItem(LAST_ONLINE_VISIT_KEY, value) } catch { /* ignore */ }
 }
 
 const ONLINE_STATUS_GROUPS = [
@@ -893,8 +993,7 @@ function buildMealPackagePrep(orders, prepDate, methodFilter, combinedOnly, stat
   return groups
 }
 
-function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersSynced }) {
-  const [loading,      setLoading]      = useState(true)
+function OnlineOrdersPanel({ orders, setOrders, loading, newBadge, setNewBadge }) {
   const [generating,   setGenerating]   = useState(null)
   const [confirming,   setConfirming]   = useState(null)
   const [cancelling,   setCancelling]   = useState(null)
@@ -905,18 +1004,9 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
   const [hiddenKeys,   setHiddenKeys]   = useState(getHidden)
   const [statusFilter, setStatusFilter] = useState('all')
   const [typeFilter,   setTypeFilter]   = useState('all')
+  const pendingPrintWindowRef = useRef(null)
 
   const sessionKey = (s) => s.session_id || `single-${s.orders[0]?.id}`
-
-  const fetchOrders = useCallback(async () => {
-    try {
-      const { data } = await getOnlineOrders()
-      setOrders(data)
-      onOrdersSynced?.(data)
-    } catch { /* ignore */ } finally { setLoading(false) }
-  }, [setOrders, onOrdersSynced])
-
-  useEffect(() => { fetchOrders() }, [fetchOrders])
 
   const updateOnlineSessionStatus = async (session, nextStatus) => {
     if (session.session_id) {
@@ -927,7 +1017,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
     return updatedResponses.map(({ data }) => data)
   }
 
-  // Confirm all orders in a session → sends notification to student
+  // Confirm all orders in a session and notify the student
   const handleConfirm = async (session, anchorEl) => {
     const key = session.session_id || session.orders[0]?.id
     setConfirming(key)
@@ -1022,6 +1112,10 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
     const firstOrderId = session.orders[0]?.id
     if (!firstOrderId) return
     setGenerating(session.session_id || firstOrderId)
+    pendingPrintWindowRef.current = openReceiptPrintWindow({
+      loadingTitle: 'Preparing online bill',
+      loadingMessage: 'Generating the bill and opening the print dialog...',
+    })
     try {
       const { data } = await generateOnlineBill(firstOrderId)
       setOrders((prev) => prev.map((s) => {
@@ -1038,6 +1132,10 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       }))
       setPrintBillId(data.id)
     } catch (err) {
+      if (pendingPrintWindowRef.current && !pendingPrintWindowRef.current.closed) {
+        pendingPrintWindowRef.current.close()
+      }
+      pendingPrintWindowRef.current = null
       alert(err.response?.data?.detail || 'Failed to generate bill.')
     } finally { setGenerating(null) }
   }
@@ -1146,7 +1244,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
 
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
               Placed {new Date(session.created_at).toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-              {' '}· {totalQty} total item{totalQty === 1 ? '' : 's'}
+              {' \u00B7 '}{totalQty} total item{totalQty === 1 ? '' : 's'}
             </div>
             {session.phone_number && (
               <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>Phone: {session.phone_number}</div>
@@ -1332,7 +1430,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
         <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : visibleOrders.length === 0 ? (
         <div className="cd-history-empty">
-          <div className="cd-history-empty-icon">📭</div>
+          <div className="cd-history-empty-icon">{'\u{1F4ED}'}</div>
           No online orders match these filters.
         </div>
       ) : (
@@ -1346,7 +1444,9 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
       {printBillId && (
         <PrintBillView
           billId={printBillId}
+          initialPrintWindow={pendingPrintWindowRef.current}
           onClose={() => {
+            pendingPrintWindowRef.current = null
             setPrintBillId(null)
           }}
         />
@@ -1355,7 +1455,7 @@ function OnlineOrdersPanel({ orders, setOrders, newBadge, setNewBadge, onOrdersS
   )
 }
 
-// ── Checkout Confirmation Modal ──────────────────────────────────────────────
+// Meal Package Prep panel
 function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
   const [prepDate, setPrepDate] = useState(toDateInputValue())
   const [methodFilter, setMethodFilter] = useState('all')
@@ -1395,18 +1495,12 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
   }, [prepGroups])
 
   const hasRows = totals.all > 0
-  const prepStatusSummary = prepStatusFilter === 'all'
-    ? 'Pending + confirmed'
-    : prepStatusFilter === 'pending'
-      ? 'Pending only'
-      : 'Confirmed only'
 
   return (
     <div className="cd-history-col cd-panel-anim">
       <div className="cd-history-topbar">
         <div>
           <div className="cd-history-heading">Meal Package Prep</div>
-          <div className="cd-history-subheading">Pending and confirmed packages by meal, preference, method, and date</div>
         </div>
         <button className="cd-btn-refresh" onClick={refreshOrders} disabled={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
@@ -1487,7 +1581,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
-        {[...PREP_GROUPS, { key: 'all', label: 'Total Packages', ready: prepStatusSummary }].map((group) => (
+        {[...PREP_GROUPS, { key: 'all', label: 'Total Packages', ready: 'Visible on prep date' }].map((group) => (
           <div key={group.key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px' }}>
             <div style={{ fontSize: '22px', fontWeight: 900, color: group.key === 'all' ? 'var(--forest)' : 'var(--espresso)', lineHeight: 1 }}>
               {totals[group.key] || 0}
@@ -1502,7 +1596,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
         <div style={{ padding: '60px', display: 'flex', justifyContent: 'center' }}><Spinner /></div>
       ) : !hasRows ? (
         <div className="cd-history-empty">
-          <div className="cd-history-empty-icon">📭</div>
+          <div className="cd-history-empty-icon">{'\u{1F4ED}'}</div>
           No pending or confirmed meal packages match these prep filters.
         </div>
       ) : (
@@ -1515,7 +1609,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ fontWeight: 900, color: 'var(--espresso)', fontSize: '14px' }}>{group.label}</div>
                   <div style={{ fontSize: '12px', fontWeight: 900, color: '#166534' }}>
-                    {totals[group.key]} package{totals[group.key] === 1 ? '' : 's'} · {prepStatusSummary} · Ready {group.ready}
+                    {`${totals[group.key]} package${totals[group.key] === 1 ? '' : 's'} · Ready ${group.ready}`}
                   </div>
                 </div>
 
@@ -1542,7 +1636,7 @@ function MealPackagePrepPanel({ orders, setOrders, onOrdersSynced }) {
                               )}
                             </div>
                             <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                              Student: <strong>{row.student_name}</strong> · Qty: <strong>{row.quantity}</strong> · Date: <strong>{row.order_date}</strong>
+                              Student: <strong>{row.student_name}</strong>{' \u00B7 '}Qty: <strong>{row.quantity}</strong>{' \u00B7 '}Date: <strong>{row.order_date}</strong>
                             </div>
                             {row.phone_number && (
                               <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '3px' }}>Phone: {row.phone_number}</div>
@@ -1593,7 +1687,33 @@ function CheckoutConfirmModal({ billLines, totalAmount, customerName, onCustomer
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: '#fff', borderRadius: '14px', padding: '28px 28px 24px', maxWidth: '440px', width: '92%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
+      <div style={{ background: '#fff', borderRadius: '14px', padding: '28px 28px 24px', maxWidth: '440px', width: '92%', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', position: 'relative' }}>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          aria-label="Close checkout confirmation"
+          style={{
+            position: 'absolute',
+            top: '14px',
+            right: '14px',
+            width: '32px',
+            height: '32px',
+            border: 'none',
+            borderRadius: '999px',
+            background: 'transparent',
+            color: '#6b7280',
+            fontSize: '24px',
+            lineHeight: 1,
+            cursor: submitting ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: submitting ? 0.5 : 1,
+          }}
+        >
+          &times;
+        </button>
         <div style={{ textAlign: 'center', marginBottom: '18px' }}>
           <div style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '0.12em', color: '#3D6B38', textTransform: 'uppercase', marginBottom: '6px' }}>{itemCount} items selected</div>
           <div style={{ fontWeight: 700, fontSize: '16px', color: '#2C1A0E' }}>Checkout Confirmation</div>
@@ -1634,7 +1754,7 @@ function CheckoutConfirmModal({ billLines, totalAmount, customerName, onCustomer
             <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#2C1A0E' }}>{item.name}</div>
-                <div style={{ fontSize: '11px', color: '#6b7280' }}>Rs.{parseFloat(item.price).toFixed(2)} × {qty}</div>
+                <div style={{ fontSize: '11px', color: '#6b7280' }}>Rs.{parseFloat(item.price).toFixed(2)} {'\u00D7'} {qty}</div>
               </div>
               <span style={{ fontSize: '13px', fontWeight: 600, color: '#2C1A0E' }}>Rs.{(qty * parseFloat(item.price)).toFixed(2)}</span>
             </div>
@@ -1664,7 +1784,49 @@ function CheckoutConfirmModal({ billLines, totalAmount, customerName, onCustomer
   )
 }
 
-// ── Walk-in Sale Tab (POS) ───────────────────────────────────────────────────
+function VariantPickerModal({ item, getQty, onAdd, onDecrease, onClose }) {
+  useBodyScrollLock()
+
+  if (!item) return null
+  const variants = getActiveVariants(item)
+
+  return createPortal(
+    <div className="cd-variant-overlay" onClick={onClose}>
+      <div className="cd-variant-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="cd-variant-head">
+          <div>
+            <div className="cd-variant-eyebrow">Menu Item Variants</div>
+            <div className="cd-variant-title">{item.name}</div>
+            <div className="cd-variant-subtitle">Add any variant directly to the bill with its own price.</div>
+          </div>
+          <button type="button" className="cd-variant-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="cd-variant-list">
+          {variants.map((variant) => {
+            const qty = getQty(item, variant)
+            return (
+              <div key={variant.id} className="cd-variant-row">
+                <div className="cd-variant-info">
+                  <div className="cd-variant-name">{variant.name}</div>
+                  <div className="cd-variant-price">Rs.{parseFloat(variant.price || 0).toFixed(2)}</div>
+                </div>
+                <div className="cd-variant-controls">
+                  <button type="button" className="cd-variant-btn" onClick={() => onDecrease(item, variant)} disabled={qty <= 0}>-</button>
+                  <span className="cd-variant-qty">{qty}</span>
+                  <button type="button" className="cd-variant-btn" onClick={() => onAdd(item, variant)}>+</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// Walk-in Sale tab (POS)
 const compareMenuItemsByCode = (a, b) => {
   const parseCode = (item) => {
     const code = (item.item_id || '').trim()
@@ -1703,12 +1865,47 @@ const compareMenuItemsByCode = (a, b) => {
   })
 }
 
+const buildItemCodeRange = (items) => {
+  const codes = [...items].sort(compareMenuItemsByCode).map((item) => (item.item_id || '').trim()).filter(Boolean)
+  if (!codes.length) return ''
+  if (codes.length === 1) return codes[0]
+  return `${codes[0]} - ${codes[codes.length - 1]}`
+}
+
+const getMenuItemLineKey = (item) => `menu-${item.id}`
+const getVariantLineKey = (item, variant) => `menu-${item.id}::variant-${variant.id}`
+const getActiveVariants = (item) => (item?.variants || []).filter((variant) => variant?.is_active !== false)
+const hasVariantChoices = (item) => getActiveVariants(item).length > 1
+const getMenuGroupLabel = (item) => {
+  const raw = (item?.menu_group_name || '').trim()
+  if (!raw) return ''
+
+  const aliases = {
+    Shakes: 'Shake',
+  }
+
+  return aliases[raw] || raw
+}
+
+const buildVariantBillName = (item, variant) => {
+  const baseName = (item?.name || '').trim()
+  const variantName = (variant?.name || '').trim()
+  const groupLabel = getMenuGroupLabel(item)
+  const baseLower = baseName.toLowerCase()
+  const labelLower = groupLabel.toLowerCase()
+  const fullBaseName = groupLabel && !baseLower.includes(labelLower)
+    ? `${baseName} ${groupLabel}`
+    : baseName
+
+  return variantName ? `${fullBaseName} - ${variantName}` : fullBaseName
+}
+
 function WalkinSaleTab({ onBillCreated }) {
   const [allItems,    setAllItems]    = useState([])
-  const [categories,  setCategories]  = useState([])
+  const [menuGroups,  setMenuGroups]  = useState([])
   const [loadingMenu, setLoadingMenu] = useState(true)
   const [search,      setSearch]      = useState('')
-  const [activeCat,   setActiveCat]   = useState('all')
+  const [activeGroup, setActiveGroup] = useState('all')
   const [customerName, setCustomerName] = useState('')
   // bill: { [itemId]: { item, qty } }
   const [bill,        setBill]        = useState({})
@@ -1717,34 +1914,80 @@ function WalkinSaleTab({ onBillCreated }) {
   const [error,       setError]       = useState('')
   const [printBill,   setPrintBill]   = useState(null)
   const [pendingRemoveLine, setPendingRemoveLine] = useState(null)
+  const [pendingClearBill, setPendingClearBill] = useState(false)
+  const [variantPickerItem, setVariantPickerItem] = useState(null)
+  const pendingPrintWindowRef = useRef(null)
 
-  // Load menu items + categories once
+  // Load menu items + menu groups once
   useEffect(() => {
-    Promise.all([getItems(), getCategories()])
-      .then(([itemsRes, catsRes]) => {
-        setAllItems(itemsRes.data)
-        setCategories(catsRes.data)
+    Promise.all([getMenuItems(), getMenuGroups()])
+      .then(([itemsRes, groupsRes]) => {
+        setAllItems(Array.isArray(itemsRes.data) ? itemsRes.data : [])
+        setMenuGroups(Array.isArray(groupsRes.data) ? groupsRes.data : [])
       })
       .catch(() => {})
       .finally(() => setLoadingMenu(false))
   }, [])
 
-  // Filtered items
+  const groupMeta = useMemo(() => {
+    const meta = {}
+    menuGroups.forEach((group) => {
+      const items = allItems.filter((item) => String(item.menu_group) === String(group.id) && item.is_available)
+      const sorted = [...items].sort(compareMenuItemsByCode)
+      meta[group.id] = {
+        firstItem: sorted[0] || null,
+        codeRange: buildItemCodeRange(sorted),
+      }
+    })
+    return meta
+  }, [menuGroups, allItems])
+
+  const sortedMenuGroups = useMemo(
+    () => [...menuGroups].sort((a, b) => {
+      const firstA = groupMeta[a.id]?.firstItem
+      const firstB = groupMeta[b.id]?.firstItem
+      if (firstA && firstB) return compareMenuItemsByCode(firstA, firstB)
+      if (firstA && !firstB) return -1
+      if (!firstA && firstB) return 1
+      return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+    }),
+    [menuGroups, groupMeta]
+  )
+
   const filteredItems = useMemo(() => {
-    const q = search.toLowerCase()
-    return allItems
-      .filter((i) => i.is_available)
-      .filter((i) => activeCat === 'all' || i.category === Number(activeCat))
-      .filter((i) => i.name.toLowerCase().includes(q) || (i.item_id || '').toLowerCase().includes(q))
+    const q = search.toLowerCase().trim()
+    const availableItems = allItems.filter((i) => i.is_available)
+    const matchesSearch = (item) => {
+      if (!q) return true
+      const variantText = (item.variants || []).map((variant) => variant.name || '').join(' ').toLowerCase()
+      return (
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.item_id || '').toLowerCase().includes(q) ||
+        variantText.includes(q)
+      )
+    }
+
+    if (activeGroup === 'all') {
+      return sortedMenuGroups.flatMap((group) =>
+        availableItems
+          .filter((item) => String(item.menu_group) === String(group.id))
+          .filter(matchesSearch)
+          .sort(compareMenuItemsByCode)
+      )
+    }
+
+    return availableItems
+      .filter((item) => String(item.menu_group) === String(activeGroup))
+      .filter(matchesSearch)
       .sort(compareMenuItemsByCode)
-  }, [allItems, activeCat, search])
+  }, [allItems, activeGroup, search, sortedMenuGroups])
 
   // Bill helpers
   const billLines   = Object.values(bill)
   const billItemCount = billLines.reduce((sum, line) => sum + line.qty, 0)
   const totalAmount = billLines.reduce((s, l) => s + l.qty * parseFloat(l.item.price), 0)
 
-  const addItem = (item) => {
+  const addBillItem = (item) => {
     setBill((prev) => ({
       ...prev,
       [item.id]: prev[item.id]
@@ -1761,6 +2004,44 @@ function WalkinSaleTab({ onBillCreated }) {
 
   const removeLine = (itemId) => {
     setBill((prev) => { const { [itemId]: _, ...rest } = prev; return rest })
+  }
+
+  const toBillMenuItem = (item) => ({
+    id: getMenuItemLineKey(item),
+    snapshot_item_id: getMenuItemLineKey(item),
+    item_id: item.item_id || '',
+    name: item.name,
+    price: Number(item.price || 0),
+    image_url: item.image_url || '',
+    is_available: item.is_available,
+  })
+
+  const toBillVariantItem = (item, variant) => ({
+    id: getVariantLineKey(item, variant),
+    snapshot_item_id: getVariantLineKey(item, variant),
+    item_id: item.item_id || '',
+    name: buildVariantBillName(item, variant),
+    price: Number(variant.price || 0),
+    image_url: item.image_url || '',
+    is_available: item.is_available,
+    variant_name: variant.name || '',
+  })
+
+  const getVariantQty = (item, variant) => bill[getVariantLineKey(item, variant)]?.qty || 0
+
+  const handleAddVariant = (item, variant) => {
+    addBillItem(toBillVariantItem(item, variant))
+  }
+
+  const handleDecreaseVariant = (item, variant) => {
+    const billItem = toBillVariantItem(item, variant)
+    const qty = bill[billItem.id]?.qty || 0
+    if (qty <= 0) return
+    if (qty === 1) {
+      removeLine(billItem.id)
+      return
+    }
+    setQty(billItem.id, qty - 1)
   }
 
   const decreaseLineQty = (item, qty) => {
@@ -1782,6 +2063,7 @@ function WalkinSaleTab({ onBillCreated }) {
     setCustomerName('')
     setError('')
     setPendingRemoveLine(null)
+    setPendingClearBill(false)
   }
 
   // Open confirmation modal
@@ -1794,11 +2076,15 @@ function WalkinSaleTab({ onBillCreated }) {
   // Actually generate bill after confirmation
   const handleConfirmCheckout = async () => {
     setSubmitting(true)
+    pendingPrintWindowRef.current = openReceiptPrintWindow({
+      loadingTitle: 'Preparing walk-in bill',
+      loadingMessage: 'Generating the bill and opening the print dialog...',
+    })
     try {
       const payload = {
         customer_name: customerName.trim(),
         items: billLines.map((l) => ({
-          item_id:    l.item.id,
+          item_id:    l.item.snapshot_item_id || l.item.id,
           name:       l.item.name,
           quantity:   l.qty,
           unit_price: parseFloat(l.item.price),
@@ -1810,6 +2096,10 @@ function WalkinSaleTab({ onBillCreated }) {
       setShowCheckout(false)
       setPrintBill(data)
     } catch (err) {
+      if (pendingPrintWindowRef.current && !pendingPrintWindowRef.current.closed) {
+        pendingPrintWindowRef.current.close()
+      }
+      pendingPrintWindowRef.current = null
       setError(err.response?.data?.detail || 'Checkout failed.')
       setShowCheckout(false)
     } finally { setSubmitting(false) }
@@ -1821,7 +2111,7 @@ function WalkinSaleTab({ onBillCreated }) {
 
   return (
     <>
-      {/* ── Left: item browser ── */}
+      {/* Left: item browser */}
       <div className="cd-products-col cd-panel-anim">
 
         {/* Search */}
@@ -1829,7 +2119,7 @@ function WalkinSaleTab({ onBillCreated }) {
           <input
             className="cd-search"
             type="text"
-            placeholder="Search items…"
+            placeholder="Search items..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             autoFocus
@@ -1839,15 +2129,15 @@ function WalkinSaleTab({ onBillCreated }) {
         {/* Category pills */}
         <div className="cd-cat-row">
           <button
-            className={`cd-cat-pill${activeCat === 'all' ? ' active' : ''}`}
-            onClick={() => setActiveCat('all')}
+            className={`cd-cat-pill${activeGroup === 'all' ? ' active' : ''}`}
+            onClick={() => setActiveGroup('all')}
           >All</button>
-          {categories.map((c) => (
+          {sortedMenuGroups.map((group) => (
             <button
-              key={c.id}
-              className={`cd-cat-pill${activeCat === String(c.id) ? ' active' : ''}`}
-              onClick={() => setActiveCat(String(c.id))}
-            >{c.name}</button>
+              key={group.id}
+              className={`cd-cat-pill${activeGroup === String(group.id) ? ' active' : ''}`}
+              onClick={() => setActiveGroup(String(group.id))}
+            >{group.name}{groupMeta[group.id]?.codeRange ? `(${groupMeta[group.id]?.codeRange})` : ''}</button>
           ))}
         </div>
 
@@ -1859,18 +2149,34 @@ function WalkinSaleTab({ onBillCreated }) {
             {filteredItems.map((item) => (
               <div
                 key={item.id}
-                className="cd-item-card"
+                className={`cd-item-card${hasVariantChoices(item) ? ' has-variants' : ''}`}
                 data-item-name={item.name}
-                onClick={() => addItem(item)}
+                onClick={() => {
+                  if (!hasVariantChoices(item)) addBillItem(toBillMenuItem(item))
+                }}
               >
                 {item.image_url
                   ? <img src={item.image_url} alt={item.name} className="cd-item-img" />
-                  : <div className="cd-item-placeholder">🍽️</div>
+                  : <div className="cd-item-placeholder">{'\u{1F37D}\uFE0F'}</div>
                 }
                 <div className="cd-item-body">
                   {item.item_id && <div className="cd-item-id">{item.item_id}</div>}
                   <div className="cd-item-name">{item.name}</div>
                   <div className="cd-item-price">Rs.{parseFloat(item.price).toFixed(2)}</div>
+                  {hasVariantChoices(item) && (
+                    <div className="cd-item-actions">
+                      <button
+                        type="button"
+                        className="cd-item-view-btn"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setVariantPickerItem(item)
+                        }}
+                      >
+                        View Variants
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -1878,7 +2184,7 @@ function WalkinSaleTab({ onBillCreated }) {
         )}
       </div>
 
-      {/* ── Right: bill panel ── */}
+      {/* Right: bill panel */}
       <div className="cd-bill-panel cd-panel-anim">
 
         <div className="cd-bill-header">
@@ -1894,7 +2200,7 @@ function WalkinSaleTab({ onBillCreated }) {
 
           {billLines.length === 0 ? (
             <div className="cd-bill-empty">
-              <div className="cd-bill-empty-icon">🛒</div>
+              <div className="cd-bill-empty-icon">{'\u{1F6D2}'}</div>
               <div className="cd-bill-empty-text">Click an item to add it here</div>
             </div>
           ) : (
@@ -1904,14 +2210,14 @@ function WalkinSaleTab({ onBillCreated }) {
                   <div className="cd-bill-row-name">{item.name}</div>
                   <div className="cd-bill-row-qty-line">Rs.{parseFloat(item.price).toFixed(2)} each</div>
                   <div className="cd-bill-qty-controls">
-                    <button className="cd-bill-qty-btn" onClick={() => decreaseLineQty(item, qty)}>−</button>
+                    <button className="cd-bill-qty-btn" onClick={() => decreaseLineQty(item, qty)}>-</button>
                     <span className="cd-bill-qty-num">{qty}</span>
                     <button className="cd-bill-qty-btn" onClick={() => setQty(item.id, qty + 1)}>+</button>
                   </div>
                 </div>
                 <div className="cd-bill-row-right">
                   <span className="cd-bill-row-price">Rs.{(qty * parseFloat(item.price)).toFixed(2)}</span>
-                  <button className="cd-bill-remove" onClick={() => removeLine(item.id)}>×</button>
+                  <button className="cd-bill-remove" onClick={() => setPendingRemoveLine(item)}>{'\u00D7'}</button>
                 </div>
               </div>
             ))
@@ -1942,12 +2248,21 @@ function WalkinSaleTab({ onBillCreated }) {
             >
               Checkout
             </button>
-            <button className="cd-btn-clear" onClick={clearBill}>Clear bill</button>
+            <button className="cd-btn-clear" onClick={() => setPendingClearBill(true)}>Clear bill</button>
           </div>
         )}
       </div>
 
-      {printBill && <PrintWalkinBill bill={printBill} onClose={() => setPrintBill(null)} />}
+      {printBill && (
+        <PrintWalkinBill
+          bill={printBill}
+          initialPrintWindow={pendingPrintWindowRef.current}
+          onClose={() => {
+            pendingPrintWindowRef.current = null
+            setPrintBill(null)
+          }}
+        />
+      )}
       {showCheckout && (
         <CheckoutConfirmModal
           billLines={billLines}
@@ -1969,11 +2284,30 @@ function WalkinSaleTab({ onBillCreated }) {
           onCancel={() => setPendingRemoveLine(null)}
         />
       )}
+      {pendingClearBill && (
+        <ConfirmDialog
+          title="Clear bill?"
+          message="Do you want to remove all items from this bill?"
+          confirmLabel="Yes, Clear"
+          cancelLabel="No, Keep"
+          onConfirm={clearBill}
+          onCancel={() => setPendingClearBill(false)}
+        />
+      )}
+      {variantPickerItem && (
+        <VariantPickerModal
+          item={variantPickerItem}
+          getQty={getVariantQty}
+          onAdd={handleAddVariant}
+          onDecrease={handleDecreaseVariant}
+          onClose={() => setVariantPickerItem(null)}
+        />
+      )}
     </>
   )
 }
 
-// ── Main Dashboard ───────────────────────────────────────────────────────────
+// Main dashboard
 export default function CashierDashboard() {
   const { user, logout } = useAuth()
 
@@ -1985,12 +2319,17 @@ export default function CashierDashboard() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historySummary, setHistorySummary] = useState(null)
   const [onlineOrders,   setOnlineOrders]   = useState([])
+  const [onlineLoading,  setOnlineLoading]  = useState(true)
   const [onlineBadge,    setOnlineBadge]    = useState(0)
   const [wsStatus,       setWsStatus]       = useState('connecting')
   const [toastQueue,     setToastQueue]     = useState([])
   const [activeToast,    setActiveToast]    = useState(null)
   const onlineSessionKeysRef = useRef(new Set())
   const seenOnlineSessionKeysRef = useRef(loadSeenOnline())
+  const lastOnlineVisitRef = useRef(loadLastOnlineVisit())
+  const onlineBootstrapDoneRef = useRef(false)
+  const onlineFetchInFlightRef = useRef(false)
+  const prevWsStatusRef = useRef('connecting')
 
   const queueNewOrderToast = useCallback((source) => {
     setToastQueue((prev) => [...prev, buildOrderToast(source)])
@@ -2047,10 +2386,21 @@ export default function CashierDashboard() {
   const notifyUnseenFromSnapshot = useCallback((sessions) => {
     if (!Array.isArray(sessions) || sessions.length === 0) return
 
+    const fallbackBaseline = new Date(Date.now() - RECENT_BOOTSTRAP_NOTIFY_MS)
+    const lastVisit = lastOnlineVisitRef.current ? new Date(lastOnlineVisitRef.current) : fallbackBaseline
+    const baselineTime = Number.isNaN(lastVisit.getTime()) ? fallbackBaseline.getTime() : lastVisit.getTime()
+
     const unseen = sessions.filter((s) => {
-      if ((s.status || '').toLowerCase() !== 'pending') return false
+      if (getOnlineSessionStatus(s) !== 'pending') return false
       const key = s.session_id || `single-${s.orders?.[0]?.id || s.id}`
-      return !seenOnlineSessionKeysRef.current.has(key)
+      if (seenOnlineSessionKeysRef.current.has(key)) return false
+
+      const first = s.orders?.[0] || {}
+      const stamp = s.cashier_received_at || s.created_at || first.cashier_received_at || first.created_at || ''
+      const sessionTime = stamp ? new Date(stamp).getTime() : 0
+      if (!sessionTime) return false
+
+      return sessionTime >= baselineTime
     })
     if (unseen.length === 0) return
 
@@ -2131,20 +2481,48 @@ export default function CashierDashboard() {
     return () => window.removeEventListener('click', requestOnFirstClick)
   }, [])
 
+  const refreshOnlineOrders = useCallback(async ({ showLoading = false, markVisit = false } = {}) => {
+    if (onlineFetchInFlightRef.current) return
+    onlineFetchInFlightRef.current = true
+    if (showLoading) setOnlineLoading(true)
+    try {
+      const { data } = await getOnlineOrders()
+      setOnlineOrders(data)
+      notifyUnseenFromSnapshot(data)
+      if (markVisit) {
+        const openedAt = new Date().toISOString()
+        lastOnlineVisitRef.current = openedAt
+        saveLastOnlineVisit(openedAt)
+      }
+    } catch {
+      // Ignore sync errors and keep the latest known snapshot.
+    } finally {
+      onlineFetchInFlightRef.current = false
+      if (showLoading) setOnlineLoading(false)
+    }
+  }, [notifyUnseenFromSnapshot])
+
   useEffect(() => {
     let alive = true
     ;(async () => {
-      try {
-        const { data } = await getOnlineOrders()
-        if (!alive) return
-        setOnlineOrders(data)
-        notifyUnseenFromSnapshot(data)
-      } catch {
-        // Ignore bootstrap sync errors.
-      }
+      await refreshOnlineOrders({ showLoading: true, markVisit: true })
+      if (alive) onlineBootstrapDoneRef.current = true
     })()
-    return () => { alive = false }
-  }, [notifyUnseenFromSnapshot])
+    return () => {
+      alive = false
+    }
+  }, [refreshOnlineOrders])
+
+  useEffect(() => {
+    const previous = prevWsStatusRef.current
+    prevWsStatusRef.current = wsStatus
+
+    if (!onlineBootstrapDoneRef.current) return
+    if (wsStatus !== 'connected') return
+    if (previous !== 'reconnecting' && previous !== 'offline') return
+
+    void refreshOnlineOrders({ showLoading: false, markVisit: false })
+  }, [wsStatus, refreshOnlineOrders])
 
   const handleNewOrder = useCallback((order) => {
     // If this session was hidden (cleared), unhide it so the new order shows
@@ -2182,7 +2560,7 @@ export default function CashierDashboard() {
           delivery_fee: order.delivery_fee ?? '0.00', phone_number: order.phone_number, status: order.status,
           orders: [{ ...order, cashier_received_at: order.cashier_received_at || new Date().toISOString() }] }, ...prev]
       }
-      // No session — standalone
+      // No session - standalone
       if (prev.find((s) => !s.session_id && s.orders[0]?.id === order.id)) return prev
       return [{ session_id: null, student_name: order.student_name, student_email: order.student_email,
         order_reference: order.order_reference || '-',
@@ -2252,7 +2630,7 @@ export default function CashierDashboard() {
   return (
     <div className="cd-root">
 
-      {/* ── Sidebar ── */}
+      {/* Sidebar */}
       <aside className="cd-sidebar">
         <div className="cd-brand">
           <div className="cd-brand-logo">
@@ -2296,7 +2674,7 @@ export default function CashierDashboard() {
         </div>
       </aside>
 
-      {/* ── Main ── */}
+      {/* Main */}
       <div className="cd-main">
         <header className="cd-topbar">
           <div>
@@ -2331,9 +2709,9 @@ export default function CashierDashboard() {
             <OnlineOrdersPanel
               orders={onlineOrders}
               setOrders={setOnlineOrders}
+              loading={onlineLoading}
               newBadge={onlineBadge}
               setNewBadge={setOnlineBadge}
-              onOrdersSynced={notifyUnseenFromSnapshot}
             />
           ) : activeTab === 'package-prep' ? (
             <MealPackagePrepPanel
@@ -2368,3 +2746,4 @@ export default function CashierDashboard() {
     </div>
   )
 }
+

@@ -3,23 +3,24 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from email.mime.image import MIMEImage
 from pathlib import Path
+from threading import Thread
 from uuid import uuid4
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
-from django.db.models import Case, IntegerField, Value, When
+from django.db import transaction, close_old_connections
+from django.db.models import Case, IntegerField, Value, When, Prefetch
 from django.db.models.functions import Substr
 from django.http import HttpResponse
 from django.utils import timezone
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.template.loader import render_to_string
 from datetime import timedelta, datetime, time
 
 from authentication.permissions import IsAdmin, IsStudent, IsAnyRole, IsAdminOrStudent, IsCashier, IsAdminOrCashier
-from pos.models import Item, WeeklyMealPlan
+from pos.models import Item, MenuItem, ItemVariant, WeeklyMealPlan
 from pos.serializers import ItemSerializer
 from reports.models import Payment
 from hotel_pos_backend.validators import validate_generic_email_format
@@ -39,6 +40,9 @@ from .serializers import (
     MealPackageSerializer,
     BillSerializer,
     SuggestionSerializer,
+    StudentMenuItemSerializer,
+    get_meal_order_item_label,
+    get_meal_order_item_unit_price,
     get_package_ready_time,
 )
 from .utils.pdf_generator import generate_bill_pdf
@@ -229,6 +233,249 @@ def _attach_bill_logo(msg, logo_cid='bill-logo-cid'):
         logger.warning('Could not attach bill logo from %s: %s', logo_path, exc)
 
 
+def _get_package_order_label(order):
+    meal_name = getattr(getattr(order, 'meal_type', None), 'name', '') or 'Package'
+    if order.preference == 'veg':
+        return f'Veg {meal_name}'
+    if order.preference == 'non-veg':
+        return f'Non-Veg {meal_name}'
+    return meal_name
+
+
+def _get_package_order_unit_price(order):
+    meal_category = 'nonveg' if order.preference == 'non-veg' else 'veg'
+    meal_time = _normalize_meal_slot_name(order.meal_type)
+    if not meal_time:
+        return Decimal('0.00')
+
+    day_of_week = order.order_date.weekday()
+    slot = WeeklyMealPlan.objects.filter(
+        meal_time=meal_time,
+        meal_category=meal_category,
+        day_of_week=day_of_week,
+    ).first()
+    if not slot:
+        slot = WeeklyMealPlan.objects.filter(
+            meal_time=meal_time,
+            meal_category=meal_category,
+        ).first()
+    return _money(slot.price if slot else 0)
+
+
+def _get_order_unit_price(order):
+    if order.order_type == 'item':
+        return _money(get_meal_order_item_unit_price(order))
+    return _get_package_order_unit_price(order)
+
+
+def _get_owner_order_email_recipient():
+    candidate = str(getattr(settings, 'OWNER_ORDER_EMAIL', '') or '').strip()
+    if not candidate:
+        candidate = str(getattr(settings, 'EMAIL_HOST_USER', '') or '').strip()
+    if not candidate:
+        return ''
+
+    try:
+        return validate_generic_email_format(candidate, required=True)
+    except DjangoValidationError as exc:
+        message = exc.messages[0] if getattr(exc, 'messages', None) else str(exc)
+        logger.warning('Skipping owner order email because OWNER_ORDER_EMAIL is invalid: %s', message)
+        return ''
+
+
+def _get_session_display_id(session_id, order_reference):
+    normalized = str(session_id or '').strip()
+    if not normalized:
+        return order_reference
+    compact = normalized.replace('-', '').upper()
+    return f'CHK-{compact[:8]}'
+
+
+def _build_owner_order_email_context(orders):
+    anchor_order = orders[0]
+    order_reference = build_order_reference(anchor_order)
+    delivery_fee = _money(anchor_order.delivery_fee)
+    subtotal = Decimal('0.00')
+    total_quantity = 0
+    has_package = False
+    has_item = False
+    order_lines = []
+
+    for order in orders:
+        if order.order_type == 'item':
+            has_item = True
+            label = get_meal_order_item_label(order) or 'Menu item'
+            kind = 'Menu Item'
+            ready_label = 'Pickup in about 30 minutes' if order.delivery_type == 'takeaway' else 'Delivery prepared after confirmation'
+        else:
+            has_package = True
+            label = _get_package_order_label(order)
+            kind = 'Meal Package'
+            ready_time = get_package_ready_time(order.meal_type)
+            ready_label = f'Ready at {ready_time}' if ready_time else 'Prepared for the selected meal slot'
+
+        unit_price = _get_order_unit_price(order)
+        quantity = int(order.quantity or 0)
+        line_total = (unit_price * Decimal(quantity)).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
+        subtotal += line_total
+        total_quantity += quantity
+
+        order_lines.append({
+            'label': label,
+            'kind': kind,
+            'quantity': quantity,
+            'unit_price': unit_price,
+            'line_total': line_total,
+            'order_date': order.order_date,
+            'ready_label': ready_label,
+        })
+
+    total_amount = (subtotal + delivery_fee).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
+    if has_package and has_item:
+        order_mix = 'Meal Package + Menu Items'
+    elif has_package:
+        order_mix = 'Meal Package'
+    else:
+        order_mix = 'Menu Items'
+
+    delivery_type = (anchor_order.delivery_type or 'takeaway').strip().lower()
+    delivery_type_label = 'Delivery' if delivery_type == 'delivery' else 'Takeaway'
+    address_label = 'Delivery Address' if delivery_type == 'delivery' else 'Pickup Details'
+    delivery_address = (anchor_order.delivery_address or '').strip()
+
+    return {
+        'order_reference': order_reference,
+        'session_id': anchor_order.session_id or str(anchor_order.id),
+        'session_display_id': _get_session_display_id(anchor_order.session_id, order_reference),
+        'student_name': anchor_order.student.full_name if anchor_order.student else 'Student',
+        'student_email': anchor_order.student_email or '',
+        'student_contact': getattr(anchor_order.student, 'contact', '') or '',
+        'phone_number': anchor_order.phone_number or '',
+        'created_at': anchor_order.created_at,
+        'delivery_type': delivery_type,
+        'delivery_type_label': delivery_type_label,
+        'address_label': address_label,
+        'delivery_address': delivery_address,
+        'address_line_1': anchor_order.address_line_1 or '',
+        'address_line_2': anchor_order.address_line_2 or '',
+        'city_area': anchor_order.city_area or '',
+        'location_source': anchor_order.location_source or '',
+        'order_mix': order_mix,
+        'total_quantity': total_quantity,
+        'line_count': len(order_lines),
+        'order_lines': order_lines,
+        'subtotal_amount': subtotal.quantize(MONEY_SCALE, rounding=ROUND_HALF_UP),
+        'delivery_fee': delivery_fee,
+        'show_delivery_fee': delivery_fee > 0 or delivery_type == 'delivery',
+        'total_amount': total_amount,
+    }
+
+
+def _render_owner_order_email_text(context):
+    lines = [
+        f"New student order received - {context['order_reference']}",
+        '',
+        f"Student: {context['student_name']}",
+        f"Email: {context['student_email'] or '-'}",
+        f"Phone: {context['phone_number'] or context['student_contact'] or '-'}",
+        f"Order placed: {timezone.localtime(context['created_at']).strftime('%b %d, %Y %I:%M %p')}",
+        f"Order type: {context['order_mix']}",
+        f"Method: {context['delivery_type_label']}",
+    ]
+
+    if context['delivery_address']:
+        lines.append(f"{context['address_label']}: {context['delivery_address']}")
+    if context['city_area']:
+        lines.append(f"Area: {context['city_area']}")
+
+    lines.extend([
+        '',
+        'Order lines:',
+    ])
+
+    for line in context['order_lines']:
+        lines.append(
+            f"- {line['label']} [{line['kind']}] x {line['quantity']} | "
+            f"Rs.{line['unit_price']:.2f} each | Rs.{line['line_total']:.2f} total | {line['ready_label']}"
+        )
+
+    lines.extend([
+        '',
+        f"Subtotal: Rs.{context['subtotal_amount']:.2f}",
+        f"Delivery fee: Rs.{context['delivery_fee']:.2f}",
+        f"Grand total: Rs.{context['total_amount']:.2f}",
+        '',
+        'This order is also available in the cashier panel.',
+    ])
+    return '\n'.join(lines)
+
+
+def _send_owner_order_email(order_ids):
+    recipient = _get_owner_order_email_recipient()
+    if not recipient:
+        return
+
+    normalized_ids = [int(order_id) for order_id in order_ids if order_id]
+    if not normalized_ids:
+        return
+
+    ordering = Case(
+        *[When(pk=pk, then=Value(index)) for index, pk in enumerate(normalized_ids)],
+        output_field=IntegerField(),
+    )
+    orders = list(
+        MealOrder.objects
+        .select_related('student', 'student__user', 'meal_type', 'item', 'menu_item', 'item_variant')
+        .filter(pk__in=normalized_ids)
+        .order_by(ordering, 'created_at', 'pk')
+    )
+    if not orders:
+        return
+
+    context = _build_owner_order_email_context(orders)
+    logo_cid = 'owner-order-logo-cid'
+    html = render_to_string('meals/owner_order_email.html', {**context, 'logo_cid': logo_cid})
+    text = _render_owner_order_email_text(context)
+    message = EmailMultiAlternatives(
+        subject=f"New Student Order - {context['order_reference']}",
+        body=text,
+        to=[recipient],
+    )
+    message.attach_alternative(html, 'text/html')
+    _attach_bill_logo(message, logo_cid=logo_cid)
+    message.send(fail_silently=False)
+
+
+def _dispatch_owner_order_email(order_ids):
+    try:
+        close_old_connections()
+        _send_owner_order_email(order_ids)
+    finally:
+        close_old_connections()
+
+
+def _queue_owner_order_email(order_ids):
+    normalized_ids = [int(order_id) for order_id in order_ids if order_id]
+    if not normalized_ids:
+        return
+
+    def _send():
+        try:
+            if getattr(settings, 'OWNER_ORDER_EMAIL_ASYNC', True):
+                Thread(
+                    target=_dispatch_owner_order_email,
+                    args=(normalized_ids,),
+                    daemon=True,
+                    name='owner-order-email',
+                ).start()
+            else:
+                _send_owner_order_email(normalized_ids)
+        except Exception as exc:
+            logger.error('Owner order email failed for orders %s: %s', normalized_ids, exc, exc_info=True)
+
+    transaction.on_commit(_send)
+
+
 def _normalized_batch_value(value):
     if isinstance(value, Decimal):
         return value.quantize(Decimal('0.000001'), rounding=ROUND_HALF_UP)
@@ -266,9 +513,10 @@ def _calculate_session_delivery_fee(validated_serializers):
     city_area = _single_batch_value(validated_serializers, 'city_area') or ''
     latitude = _single_batch_value(validated_serializers, 'delivery_latitude')
     longitude = _single_batch_value(validated_serializers, 'delivery_longitude')
+    package_only_checkout = has_package and not has_item
     return calculate_delivery_quote(
         delivery_type=delivery_type,
-        has_package=has_package and not has_item,
+        has_package=package_only_checkout,
         location_source=location_source,
         full_address=full_address,
         city_area=city_area,
@@ -282,6 +530,34 @@ def _ordered_available_items():
         Item.objects
         .filter(is_available=True, category__is_active=True)
         .select_related('category')
+        .annotate(
+            missing_item_code=Case(
+                When(item_id='', then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+            item_code_group=Substr('item_id', 4),
+            item_code_number=Substr('item_id', 1, 3),
+        )
+        .order_by('missing_item_code', 'item_code_group', 'item_code_number', 'name', 'id')
+    )
+
+
+def _ordered_available_student_menu_items():
+    return (
+        MenuItem.objects
+        .filter(
+            is_available=True,
+            menu_group__is_active=True,
+            menu_group__category__is_active=True,
+        )
+        .select_related('menu_group', 'menu_group__category')
+        .prefetch_related(
+            Prefetch(
+                'variants',
+                queryset=ItemVariant.objects.filter(is_active=True).order_by('sort_order', 'name', 'id'),
+            )
+        )
         .annotate(
             missing_item_code=Case(
                 When(item_id='', then=Value(1)),
@@ -332,8 +608,8 @@ class StudentItemsView(APIView):
     permission_classes = [IsAdminOrStudent]
 
     def get(self, request):
-        items = _ordered_available_items()
-        return Response(ItemSerializer(items, many=True, context={'request': request}).data)
+        items = _ordered_available_student_menu_items()
+        return Response(StudentMenuItemSerializer(items, many=True, context={'request': request}).data)
 
 
 class MealOrderView(APIView):
@@ -404,11 +680,12 @@ class MealOrderView(APIView):
             order_date=order_date,
             delivery_fee=delivery_quote['delivery_fee'],
         )
+        _queue_owner_order_email([order.id])
         return Response(MealOrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
     def get(self, request):
         if request.user.role.name == 'admin':
-            qs = MealOrder.objects.select_related('student', 'meal_type', 'item').order_by('-created_at')
+            qs = MealOrder.objects.select_related('student', 'meal_type', 'item', 'menu_item', 'item_variant').order_by('-created_at')
             date          = request.query_params.get('order_date')
             status_filter = request.query_params.get('status')
             type_filter   = request.query_params.get('order_type')
@@ -634,13 +911,14 @@ class MealOrderBatchView(APIView):
         except ValueError as e:
             return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        _queue_owner_order_email([order.id for order in created])
         return Response(MealOrderSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
 
 
 def _record_payment(order):
     """Create a Payment record for a confirmed MealOrder."""
-    if order.order_type == 'item' and order.item:
-        unit_price = _money(order.item.price)
+    if order.order_type == 'item':
+        unit_price = _money(get_meal_order_item_unit_price(order))
         amount = (unit_price * Decimal(order.quantity or 0)).quantize(MONEY_SCALE, rounding=ROUND_HALF_UP)
     else:
         meal_category = 'nonveg' if order.preference == 'non-veg' else 'veg'
@@ -673,7 +951,7 @@ def _record_payment(order):
 
 def _order_status_label(order):
     if order.order_type == 'item':
-        return order.item.name if order.item else 'Item'
+        return get_meal_order_item_label(order) or 'Item'
     meal = order.meal_type.name if order.meal_type else 'Package'
     return f"{'Veg' if order.preference == 'veg' else 'Non-Veg'} {meal}" if order.preference else meal
 
@@ -769,7 +1047,7 @@ class MealOrderStatusView(APIView):
             _record_payment(order)
             pickup = _order_ready_message(order)
             if order.order_type == 'item':
-                label = order.item.name if order.item else 'Item'
+                label = get_meal_order_item_label(order) or 'Item'
             else:
                 meal = order.meal_type.name if order.meal_type else 'Package'
                 label = f"{'Veg' if order.preference == 'veg' else 'Non-Veg'} {meal}" if order.preference else meal
@@ -777,14 +1055,14 @@ class MealOrderStatusView(APIView):
         elif new_status == 'cancelled':
             Payment.objects.filter(reference_type='meal', reference_id=order.id).delete()
             if order.order_type == 'item':
-                label = order.item.name if order.item else 'Item'
+                label = get_meal_order_item_label(order) or 'Item'
             else:
                 meal = order.meal_type.name if order.meal_type else 'Package'
                 label = f"{'Veg' if order.preference == 'veg' else 'Non-Veg'} {meal}" if order.preference else meal
             msg = f'❌ Your {label} order for {order.order_date} has been cancelled. Please contact us if you have any questions.'
         else:
             if order.order_type == 'item':
-                label = order.item.name if order.item else 'Item'
+                label = get_meal_order_item_label(order) or 'Item'
             else:
                 meal = order.meal_type.name if order.meal_type else 'Package'
                 label = f"{'Veg' if order.preference == 'veg' else 'Non-Veg'} {meal}" if order.preference else meal
@@ -1055,26 +1333,21 @@ class OnlineOrdersView(APIView):
     permission_classes = [IsAdminOrCashier]
 
     def get(self, request):
-        qs = MealOrder.objects.select_related('student', 'meal_type', 'item', 'bill', 'bill__cashier') \
+        qs = MealOrder.objects.select_related('student', 'meal_type', 'item', 'menu_item', 'item_variant', 'bill', 'bill__cashier') \
                               .order_by('-created_at')
         order_ref_cache = {}
         status_filter = request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        orders_to_mark_received = []
         received_at = timezone.now()
-        for order in qs:
-            if order.cashier_received_at is None:
-                order.cashier_received_at = received_at
-                orders_to_mark_received.append(order)
-        if orders_to_mark_received:
-            MealOrder.objects.bulk_update(orders_to_mark_received, ['cashier_received_at'])
+        qs.filter(cashier_received_at__isnull=True).update(cashier_received_at=received_at)
+        orders = list(qs)
 
         # Group by session_id; orders without a session are their own group
         sessions = {}
         ungrouped = []
-        for order in qs:
+        for order in orders:
             sid = order.session_id
             if sid:
                 if sid not in sessions:
@@ -1165,7 +1438,7 @@ class OnlineOrderDetailView(APIView):
 
     def get(self, request, pk):
         try:
-            order = MealOrder.objects.select_related('student', 'meal_type', 'item').get(pk=pk)
+            order = MealOrder.objects.select_related('student', 'meal_type', 'item', 'menu_item', 'item_variant').get(pk=pk)
         except MealOrder.DoesNotExist:
             return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(MealOrderSerializer(order).data)
@@ -1271,9 +1544,9 @@ class GenerateBillView(APIView):
         items_snapshot = []
         subtotal = Decimal('0.00')
         for o in session_orders:
-            if o.order_type == 'item' and o.item:
-                label      = o.item.name
-                unit_price = _money(o.item.price)
+            if o.order_type == 'item':
+                label      = get_meal_order_item_label(o) or 'Item'
+                unit_price = _money(get_meal_order_item_unit_price(o))
             else:
                 label      = o.meal_type.name if o.meal_type else 'Package'
                 meal_category = 'nonveg' if o.preference == 'non-veg' else 'veg'

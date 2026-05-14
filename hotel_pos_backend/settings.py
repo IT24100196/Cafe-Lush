@@ -138,6 +138,11 @@ CORS_ALLOWED_ORIGINS = config(
     cast=Csv(),
 )
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='http://localhost:3000',
+    cast=Csv(),
+)
 
 # ── Internationalisation ──────────────────────────────────────────────────────
 LANGUAGE_CODE = 'en-us'
@@ -170,3 +175,5 @@ DEFAULT_FROM_EMAIL  = config('DEFAULT_FROM_EMAIL',  default='Cafe Lush <noreply@
 EMAIL_PROVIDER      = config('EMAIL_PROVIDER',      default='smtp')
 RESEND_API_KEY      = config('RESEND_API_KEY',      default='')
 RESEND_API_URL      = config('RESEND_API_URL',      default='https://api.resend.com/emails')
+OWNER_ORDER_EMAIL   = config('OWNER_ORDER_EMAIL',   default=EMAIL_HOST_USER)
+OWNER_ORDER_EMAIL_ASYNC = _env_bool('OWNER_ORDER_EMAIL_ASYNC', default=True)

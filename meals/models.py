@@ -1,6 +1,6 @@
 from django.db import models
 from authentication.models import User
-from pos.models import Item
+from pos.models import Item, MenuItem, ItemVariant
 
 
 class Student(models.Model):
@@ -50,6 +50,10 @@ class MealOrder(models.Model):
     student          = models.ForeignKey(Student,  on_delete=models.PROTECT, related_name='orders')
     meal_type        = models.ForeignKey(MealType, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
     item             = models.ForeignKey(Item,     on_delete=models.PROTECT, related_name='meal_orders', null=True, blank=True)
+    menu_item        = models.ForeignKey(MenuItem, on_delete=models.PROTECT, related_name='student_orders', null=True, blank=True)
+    item_variant     = models.ForeignKey(ItemVariant, on_delete=models.PROTECT, related_name='student_orders', null=True, blank=True)
+    item_name_snapshot = models.CharField(max_length=200, blank=True, default='')
+    item_price_snapshot = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     order_type       = models.CharField(max_length=10, choices=ORDER_TYPE_CHOICES, default='package')
     order_date       = models.DateField()
     delivery_type    = models.CharField(max_length=20, choices=DELIVERY_CHOICES, default='takeaway')

@@ -34,12 +34,15 @@ export function Badge({ status, label }) {
 }
 
 // Modal
-export function Modal({ title, onClose, children }) {
+export function Modal({ title, onClose, children, maxWidthClass = 'max-w-lg', maxWidth }) {
   useBodyScrollLock()
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-brown-dark/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-cream-dark">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-brown-dark/50 p-4 pt-10 backdrop-blur-sm">
+      <div
+        className={`bg-white rounded-2xl shadow-2xl w-full ${maxWidthClass} max-h-[90vh] overflow-y-auto border border-cream-dark`}
+        style={maxWidth ? { maxWidth } : undefined}
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-cream-dark">
           <h3 className="font-playfair font-bold text-brown text-lg">{title}</h3>
           <button onClick={onClose} className="text-brown/40 hover:text-brown text-2xl leading-none transition-colors">&times;</button>
