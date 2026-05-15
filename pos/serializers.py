@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from hotel_pos_backend.media_utils import build_existing_media_url
 from .models import (
     Category, CatalogCategory, MenuGroup, MenuItem, ItemVariant,
     Item, PosOrder, PosOrderItem, FeaturedItem, WeeklyMealPlan,
@@ -72,10 +73,8 @@ class MenuItemSerializer(serializers.ModelSerializer):
         extra_kwargs = {'image': {'required': False, 'allow_null': True}}
 
     def get_image_url(self, obj):
-        if not obj.image:
-            return None
         request = self.context.get('request')
-        return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return build_existing_media_url(obj.image, request)
 
     def get_variant_count(self, obj):
         return getattr(obj, 'variant_count', obj.variants.count())
@@ -98,10 +97,8 @@ class ItemSerializer(serializers.ModelSerializer):
         extra_kwargs = {'image': {'required': False, 'allow_null': True}, 'item_id': {'required': False}}
 
     def get_image_url(self, obj):
-        if not obj.image:
-            return None
         request = self.context.get('request')
-        return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return build_existing_media_url(obj.image, request)
 
     def validate_price(self, value):
         if value is None or value <= 0:

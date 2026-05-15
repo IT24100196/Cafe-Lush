@@ -935,7 +935,7 @@ export default function LoginPage() {
                         name="student_register_username"
                         autoComplete="off"
                         maxLength={30}
-                        pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
+                        pattern="(?=.*[A-Za-z])[-A-Za-z0-9._]{3,30}"
                         required />
                       <InputField compact label="Contact" icon={<IconPhone />} placeholder="07xxxxxxxx"
                         value={regForm.contact}

@@ -1,9 +1,19 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
+import logging
+import secrets
+from datetime import timedelta
+
+import requests as http_requests
+from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
+
 from .serializers import (
     RegisterSerializer,
     StudentRegisterSerializer,
@@ -25,17 +35,10 @@ from .jwt import (
     blacklist_outstanding_tokens,
     build_token_pair,
 )
-from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.auth.hashers import check_password, make_password
-from django.db import transaction
-from django.utils import timezone
-from datetime import timedelta
-import secrets
-import requests as http_requests
 from .email import send_transactional_email
 
 GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
+logger = logging.getLogger(__name__)
 User = get_user_model()
 RESET_OTP_EXPIRY_MINUTES = 10
 RESET_OTP_MAX_ATTEMPTS = 5
@@ -98,7 +101,7 @@ class StudentRegistrationOTPRequestView(APIView):
             used_at__isnull=True,
         ).update(used_at=now)
 
-        PendingStudentRegistration.objects.create(
+        pending = PendingStudentRegistration.objects.create(
             username=payload['username'],
             email=payload['email'],
             password_hash=make_password(payload['password']),
@@ -108,15 +111,26 @@ class StudentRegistrationOTPRequestView(APIView):
             expires_at=now + timedelta(minutes=REGISTRATION_OTP_EXPIRY_MINUTES),
         )
 
-        send_transactional_email(
-            subject='Cafe Lush registration OTP',
-            message=(
-                f'Your Cafe Lush registration OTP is {otp}.\n\n'
-                f'This code expires in {REGISTRATION_OTP_EXPIRY_MINUTES} minutes. '
-                'If you did not request this, you can ignore this email.'
-            ),
-            recipient_list=[payload['email']],
-        )
+        try:
+            send_transactional_email(
+                subject='Cafe Lush registration OTP',
+                message=(
+                    f'Your Cafe Lush registration OTP is {otp}.\n\n'
+                    f'This code expires in {REGISTRATION_OTP_EXPIRY_MINUTES} minutes. '
+                    'If you did not request this, you can ignore this email.'
+                ),
+                recipient_list=[payload['email']],
+            )
+        except Exception:
+            pending.delete()
+            logger.exception(
+                'Failed to send student registration OTP email to %s',
+                payload['email'],
+            )
+            return Response(
+                {'detail': 'We could not send the OTP email right now. Please try again shortly.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({'detail': 'OTP sent to your email.'})
 

@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from datetime import timedelta
 from django.core.exceptions import ValidationError as DjangoValidationError
-from pos.models import Item, MenuItem, ItemVariant
+from hotel_pos_backend.media_utils import build_existing_media_url
 from hotel_pos_backend.validators import validate_generic_email_format, validate_sri_lankan_mobile
+from pos.models import Item, MenuItem, ItemVariant
 from .delivery import (
     LOCATION_SOURCE_ADDRESS,
     LOCATION_SOURCE_CURRENT,
@@ -108,10 +109,8 @@ class StudentMenuItemSerializer(serializers.ModelSerializer):
         ]
 
     def get_image_url(self, obj):
-        if not obj.image:
-            return None
         request = self.context.get('request')
-        return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return build_existing_media_url(obj.image, request)
 
 
 class MealPackageSerializer(serializers.ModelSerializer):

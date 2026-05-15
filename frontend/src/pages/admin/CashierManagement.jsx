@@ -265,7 +265,7 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                         onChange={(e) => handleChange('username', e.target.value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 30))}
                         autoFocus
                         maxLength={30}
-                        pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
+                        pattern="(?=.*[A-Za-z])[-A-Za-z0-9._]{3,30}"
                       />
                     </div>
 
@@ -308,7 +308,7 @@ function CashierFormModal({ title, submitLabel, initialValues, onSubmit, onClose
                     value={form.username}
                     onChange={(e) => handleChange('username', e.target.value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 30))}
                     maxLength={30}
-                    pattern="(?=.*[A-Za-z])[A-Za-z0-9._-]{3,30}"
+                    pattern="(?=.*[A-Za-z])[-A-Za-z0-9._]{3,30}"
                   />
                 </div>
 
