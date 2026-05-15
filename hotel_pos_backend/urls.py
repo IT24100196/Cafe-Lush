@@ -1,8 +1,8 @@
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
-from django.conf.urls.static import static
 from django.http import HttpResponse, JsonResponse
+from django.views.static import serve
 
 
 def root_healthcheck(request):
@@ -30,4 +30,5 @@ urlpatterns = [
     path('api/events/',   include('events.urls')),
     path('api/partners/', include('partners.urls')),
     path('api/reports/',  include('reports.urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+]
