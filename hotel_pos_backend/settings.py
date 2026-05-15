@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'channels',
+    'hotel_pos_backend',
     'authentication',
     'meals',
     'pos',
